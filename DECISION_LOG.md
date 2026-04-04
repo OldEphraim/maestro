@@ -148,6 +148,28 @@
 
 ---
 
+## WhatsApp webhook polls for execution completion before replying
+
+**Date:** 2026-04-04
+**Phase:** Phase 3 — External Channel + Scheduler
+**Decision:** The inbound WhatsApp webhook handler returns 200 immediately to Twilio, then spawns a goroutine that polls `GetExecution` every second (up to 120s) until the ad-hoc execution completes. Once done, it reads the last message and sends it as the WhatsApp reply.
+**Alternatives considered:** (1) Blocking the HTTP handler until execution completes (Twilio would timeout). (2) Using a channel/callback from the engine (requires engine refactoring). (3) Subscribing to SSE events internally.
+**Rationale:** Twilio requires a fast 200 response. Polling is simple and reliable. The engine already sets execution status to "completed"/"failed"/"timed_out", so polling is a natural fit. The 120s cap prevents leaked goroutines.
+**Consequences:** There's a 1-second latency granularity on the reply. Acceptable for a demo.
+
+---
+
+## FindByChannel uses PostgreSQL JSONB containment operator
+
+**Date:** 2026-04-04
+**Phase:** Phase 3 — External Channel + Scheduler
+**Decision:** `agent.Store.FindByChannel` queries `WHERE channels @> '["whatsapp"]'::jsonb` using PostgreSQL's JSONB containment operator.
+**Alternatives considered:** Loading all agents and filtering in Go.
+**Rationale:** Pushes the filter to the database. JSONB `@>` is indexable and idiomatic PostgreSQL. Returns the first matching agent (`LIMIT 1`).
+**Consequences:** Only one agent per channel is supported for inbound routing. Sufficient for demo.
+
+---
+
 ## Goose CLI output format differs from STEPS.md assumptions
 
 **Date:** 2026-04-04

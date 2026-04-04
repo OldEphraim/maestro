@@ -83,7 +83,7 @@ func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.
 	r.Get("/api/events", SSEHandler(broadcaster))
 
 	// Webhooks
-	r.Post("/api/webhooks/whatsapp", whatsappWebhookHandler())
+	r.Post("/api/webhooks/whatsapp", whatsappWebhookHandler(agents, engine, broadcaster))
 
 	// Mock data
 	r.Get("/api/mock/failed-transactions", mockFailedTransactionsHandler())

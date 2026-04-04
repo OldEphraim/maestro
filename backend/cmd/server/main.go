@@ -16,6 +16,7 @@ import (
 	"github.com/oldephraim/maestro/backend/internal/channels"
 	"github.com/oldephraim/maestro/backend/internal/db"
 	"github.com/oldephraim/maestro/backend/internal/runtime"
+	"github.com/oldephraim/maestro/backend/internal/scheduler"
 	"github.com/oldephraim/maestro/backend/internal/sse"
 	"github.com/oldephraim/maestro/backend/internal/workflow"
 )
@@ -86,7 +87,12 @@ func main() {
 
 	// Initialize workflow engine
 	engine := workflow.NewEngine(agentStore, workflowStore, runner, broadcaster, whatsappClient)
-	_ = engine
+
+	// Initialize scheduler
+	sched := scheduler.New(engine, agentStore, workflowStore)
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	go sched.Start(schedCtx)
 
 	// Templates directory
 	templatesDir := envOrDefault("TEMPLATES_DIR", "templates")

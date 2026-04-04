@@ -108,6 +108,24 @@ func (s *Store) Update(ctx context.Context, a Agent) (Agent, error) {
 	return a, nil
 }
 
+func (s *Store) FindByChannel(ctx context.Context, channel string) (Agent, error) {
+	var a Agent
+	var toolsJSON, channelsJSON, guardrailsJSON []byte
+	err := s.db.QueryRow(ctx,
+		`SELECT id, name, role, system_prompt, model, tools, channels, guardrails, created_at, updated_at
+		 FROM agents WHERE channels @> $1::jsonb LIMIT 1`,
+		fmt.Sprintf(`[%q]`, channel),
+	).Scan(&a.ID, &a.Name, &a.Role, &a.SystemPrompt, &a.Model,
+		&toolsJSON, &channelsJSON, &guardrailsJSON, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return Agent{}, fmt.Errorf("agent.FindByChannel: %w", err)
+	}
+	json.Unmarshal(toolsJSON, &a.Tools)
+	json.Unmarshal(channelsJSON, &a.Channels)
+	json.Unmarshal(guardrailsJSON, &a.Guardrails)
+	return a, nil
+}
+
 func (s *Store) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
 	if err != nil {
