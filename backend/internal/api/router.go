@@ -11,7 +11,7 @@ import (
 	"github.com/oldephraim/maestro/backend/internal/workflow"
 )
 
-func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.Broadcaster) http.Handler {
+func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.Broadcaster, engine *workflow.Engine, templatesDir string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(cors.Handler(cors.Options{
@@ -56,7 +56,7 @@ func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.
 			r.Get("/", workflowGetHandler(workflows))
 			r.Put("/", workflowUpdateHandler(workflows))
 			r.Delete("/", workflowDeleteHandler(workflows))
-			r.Post("/execute", workflowExecuteHandler())
+			r.Post("/execute", workflowExecuteHandler(engine))
 			r.Post("/nodes", workflowCreateNodeHandler(workflows))
 			r.Delete("/nodes/{nodeId}", workflowDeleteNodeHandler(workflows))
 			r.Post("/edges", workflowCreateEdgeHandler(workflows))
@@ -76,8 +76,8 @@ func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.
 	})
 
 	// Templates
-	r.Get("/api/templates", templateListHandler())
-	r.Post("/api/templates/{id}/load", templateLoadHandler())
+	r.Get("/api/templates", templateListHandler(templatesDir))
+	r.Post("/api/templates/{id}/load", templateLoadHandler(templatesDir, agents, workflows))
 
 	// SSE
 	r.Get("/api/events", SSEHandler(broadcaster))

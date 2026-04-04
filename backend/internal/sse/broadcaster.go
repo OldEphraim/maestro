@@ -9,6 +9,8 @@ type Event struct {
 	Type        string `json:"type"`
 	ExecutionID string `json:"execution_id,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to,omitempty"`
 	Payload     any    `json:"payload,omitempty"`
 }
 

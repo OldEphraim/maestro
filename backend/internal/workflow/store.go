@@ -309,6 +309,10 @@ func (s *Store) GetLogs(ctx context.Context, execID uuid.UUID) ([]Log, error) {
 	return logs, nil
 }
 
+func (s *Store) LogError(ctx context.Context, execID, agentID uuid.UUID, message string) {
+	s.LogEvent(ctx, execID, agentID, "error", message, nil)
+}
+
 // --- Costs ---
 
 type Usage struct {

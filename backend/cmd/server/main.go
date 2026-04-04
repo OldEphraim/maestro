@@ -13,6 +13,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/oldephraim/maestro/backend/internal/agent"
 	"github.com/oldephraim/maestro/backend/internal/api"
+	"github.com/oldephraim/maestro/backend/internal/channels"
 	"github.com/oldephraim/maestro/backend/internal/db"
 	"github.com/oldephraim/maestro/backend/internal/runtime"
 	"github.com/oldephraim/maestro/backend/internal/sse"
@@ -68,13 +69,30 @@ func main() {
 		)
 		log.Println("runtime: goose")
 	}
-	_ = runner // Will be used by engine in Phase 2
-
 	// Initialize SSE broadcaster
 	broadcaster := sse.NewBroadcaster()
 
+	// Initialize WhatsApp client (NoopClient until Phase 3 wires Twilio)
+	var whatsappClient channels.WhatsAppClient
+	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
+	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
+	fromNumber := os.Getenv("TWILIO_WHATSAPP_FROM")
+	if accountSID != "" && authToken != "" {
+		whatsappClient = channels.NewTwilioClient(accountSID, authToken, fromNumber)
+	} else {
+		log.Println("TWILIO credentials not set — using NoopClient")
+		whatsappClient = &channels.NoopClient{}
+	}
+
+	// Initialize workflow engine
+	engine := workflow.NewEngine(agentStore, workflowStore, runner, broadcaster, whatsappClient)
+	_ = engine
+
+	// Templates directory
+	templatesDir := envOrDefault("TEMPLATES_DIR", "templates")
+
 	// Initialize router
-	router := api.NewRouter(agentStore, workflowStore, broadcaster)
+	router := api.NewRouter(agentStore, workflowStore, broadcaster, engine, templatesDir)
 
 	// Start server
 	addr := fmt.Sprintf(":%s", port)

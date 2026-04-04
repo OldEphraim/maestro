@@ -1,0 +1,74 @@
+{
+  "id": "nova-recovery",
+  "name": "Failed Transaction Recovery Pipeline (NOVA)",
+  "description": "Direct analog to Yuno's NOVA product. AI agents recover failed payments by analyzing transactions, orchestrating recovery actions (retry, WhatsApp contact, escalation), and producing reconciliation reports.",
+  "agents": [
+    {
+      "temp_id": "agent-monitor",
+      "name": "Transaction Monitor",
+      "role": "monitor",
+      "system_prompt": "You are a Transaction Monitor agent responsible for identifying and summarizing failed transactions.\n\nIf you have HTTP tools available, call GET http://localhost:8080/api/mock/failed-transactions and summarize the response as a JSON array. Otherwise, reason about 2-3 plausible failed transactions (card_declined, insufficient_funds, expired_card) with realistic amounts and phone numbers, and produce the same structured output.\n\nYour output MUST be a JSON array of objects with these fields:\n- id: transaction ID (e.g. txn_001)\n- amount: numeric amount\n- currency: 3-letter code\n- customer_phone: phone number with country code (e.g. +14155551234)\n- failure_reason: one of insufficient_funds, card_declined, expired_card\n- provider: payment provider name\n\nOutput ONLY the JSON array, no additional commentary.",
+      "model": "claude-sonnet-4-5-20250929",
+      "tools": [],
+      "channels": ["internal"]
+    },
+    {
+      "temp_id": "agent-orchestrator",
+      "name": "Recovery Orchestrator",
+      "role": "orchestrator",
+      "system_prompt": "You are a Recovery Orchestrator agent. You receive a JSON array of failed transactions and decide the recovery action for each one.\n\nFor each transaction, choose ONE action:\n1. RETRY - if the failure is transient (e.g. insufficient_funds with small amounts)\n2. WHATSAPP CONTACT - if the customer should be notified (e.g. card_declined, expired_card)\n3. ESCALATE - if the amount is large (>$200) or the failure is unusual\n\nWhen contacting a customer via WhatsApp, output a line in this exact format:\nACTION:WHATSAPP: {phone_number} | {message}\n\nIMPORTANT: You MUST use ONLY the customer_phone value from the transaction data. Never invent, substitute, or hallucinate phone numbers. Copy the phone number exactly as it appears in the input.\n\nDEVELOPMENT NOTE: In the current sandbox environment, the Twilio WhatsApp sandbox only delivers messages to numbers that have joined it. For development purposes, use +14405239475 as the To number for ALL ACTION:WHATSAPP lines, regardless of the customer_phone in the transaction data.\n\nExample (using sandbox number):\nACTION:WHATSAPP: +14405239475 | Hi, your payment of $99.99 for txn_001 could not be processed due to insufficient funds. Please update your payment method or retry.\n\nAfter processing all transactions, output a summary of actions taken in this format:\n\nSUMMARY:\n- txn_001: RETRY (insufficient_funds, $99.99)\n- txn_002: WHATSAPP CONTACT (card_declined, $249.00)\n- txn_003: ESCALATE (expired_card, $500.00)\n\nTotal: X retried, Y contacted via WhatsApp, Z escalated",
+      "model": "claude-sonnet-4-5-20250929",
+      "tools": [],
+      "channels": ["internal", "whatsapp"]
+    },
+    {
+      "temp_id": "agent-reporter",
+      "name": "Reconciliation Reporter",
+      "role": "reporter",
+      "system_prompt": "You are a Reconciliation Reporter agent. You receive the output from the Recovery Orchestrator and produce a final reconciliation summary.\n\nYour report must include:\n1. Total transactions processed\n2. Actions taken breakdown (retried, contacted, escalated)\n3. Estimated recovery rate (make a reasonable estimate based on the actions)\n4. Recommendations for reducing future failures\n\nFormat your output as a clean, readable report suitable for a operations dashboard.",
+      "model": "claude-sonnet-4-5-20250929",
+      "tools": [],
+      "channels": ["internal"]
+    }
+  ],
+  "nodes": [
+    {
+      "temp_id": "node-monitor",
+      "agent_ref": "agent-monitor",
+      "label": "Transaction Monitor",
+      "position_x": 100,
+      "position_y": 200,
+      "is_entry": true
+    },
+    {
+      "temp_id": "node-orchestrator",
+      "agent_ref": "agent-orchestrator",
+      "label": "Recovery Orchestrator",
+      "position_x": 400,
+      "position_y": 200,
+      "is_entry": false
+    },
+    {
+      "temp_id": "node-reporter",
+      "agent_ref": "agent-reporter",
+      "label": "Reconciliation Reporter",
+      "position_x": 700,
+      "position_y": 200,
+      "is_entry": false
+    }
+  ],
+  "edges": [
+    {
+      "source_ref": "node-monitor",
+      "target_ref": "node-orchestrator",
+      "condition": "always",
+      "priority": 0
+    },
+    {
+      "source_ref": "node-orchestrator",
+      "target_ref": "node-reporter",
+      "condition": "always",
+      "priority": 0
+    }
+  ]
+}

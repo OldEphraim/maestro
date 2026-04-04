@@ -1,8 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -353,10 +359,28 @@ func workflowDeleteHandler(store *workflow.Store) http.HandlerFunc {
 	}
 }
 
-func workflowExecuteHandler() http.HandlerFunc {
+func workflowExecuteHandler(engine *workflow.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Stub — will be wired to engine in Phase 2
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stub"})
+		id, err := parseUUID(r, "id")
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Trigger string `json:"trigger"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Trigger == "" {
+			body.Trigger = "manual"
+		}
+		// Use background context — the engine runs asynchronously after the HTTP response is sent.
+		// The request context would cancel the engine goroutine when the response completes.
+		execID, err := engine.Execute(context.Background(), id, body.Trigger)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"execution_id": execID.String()})
 	}
 }
 
@@ -506,24 +530,210 @@ func executionLogsHandler(store *workflow.Store) http.HandlerFunc {
 
 func executionCancelHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Stub — will be wired in Phase 2 if time allows
+		// Stub — cancel support requires per-execution cancel contexts (stretch goal)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stub"})
 	}
 }
 
 // --- Template handlers ---
 
-func templateListHandler() http.HandlerFunc {
+type templateInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type templateFile struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Agents      []struct {
+		TempID       string   `json:"temp_id"`
+		Name         string   `json:"name"`
+		Role         string   `json:"role"`
+		SystemPrompt string   `json:"system_prompt"`
+		Model        string   `json:"model"`
+		Tools        []string `json:"tools"`
+		Channels     []string `json:"channels"`
+	} `json:"agents"`
+	Nodes []struct {
+		TempID   string  `json:"temp_id"`
+		AgentRef string  `json:"agent_ref"`
+		Label    string  `json:"label"`
+		PosX     float64 `json:"position_x"`
+		PosY     float64 `json:"position_y"`
+		IsEntry  bool    `json:"is_entry"`
+	} `json:"nodes"`
+	Edges []struct {
+		SourceRef string `json:"source_ref"`
+		TargetRef string `json:"target_ref"`
+		Condition string `json:"condition"`
+		Priority  int    `json:"priority"`
+	} `json:"edges"`
+}
+
+func templateListHandler(templatesDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Stub — will read from backend/templates/ in Phase 2
-		writeJSON(w, http.StatusOK, []any{})
+		entries, err := os.ReadDir(templatesDir)
+		if err != nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		var templates []templateInfo
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(templatesDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var tf templateFile
+			if err := json.Unmarshal(data, &tf); err != nil {
+				continue
+			}
+			templates = append(templates, templateInfo{ID: tf.ID, Name: tf.Name, Description: tf.Description})
+		}
+		if templates == nil {
+			templates = []templateInfo{}
+		}
+		writeJSON(w, http.StatusOK, templates)
 	}
 }
 
-func templateLoadHandler() http.HandlerFunc {
+func templateLoadHandler(templatesDir string, agents *agent.Store, workflows *workflow.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Stub — will create workflow from template JSON in Phase 2
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stub"})
+		templateID := chi.URLParam(r, "id")
+
+		// Find template file
+		entries, err := os.ReadDir(templatesDir)
+		if err != nil {
+			http.Error(w, "templates directory not found", http.StatusInternalServerError)
+			return
+		}
+
+		var tf templateFile
+		found := false
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(templatesDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var candidate templateFile
+			if err := json.Unmarshal(data, &candidate); err != nil {
+				continue
+			}
+			if candidate.ID == templateID {
+				tf = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "template not found", http.StatusNotFound)
+			return
+		}
+
+		ctx := r.Context()
+
+		// Create agents, mapping temp_id → real UUID
+		agentMap := make(map[string]uuid.UUID)
+		for _, ta := range tf.Agents {
+			a := agent.Agent{
+				Name:         ta.Name,
+				Role:         ta.Role,
+				SystemPrompt: ta.SystemPrompt,
+				Model:        ta.Model,
+				Tools:        ta.Tools,
+				Channels:     ta.Channels,
+			}
+			if a.Model == "" {
+				a.Model = "claude-sonnet-4-5-20250929"
+			}
+			if a.Tools == nil {
+				a.Tools = []string{}
+			}
+			if a.Channels == nil {
+				a.Channels = []string{}
+			}
+			created, err := agents.Create(ctx, a)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("create agent %s: %v", ta.Name, err), http.StatusInternalServerError)
+				return
+			}
+			agentMap[ta.TempID] = created.ID
+		}
+
+		// Create workflow
+		wf := workflow.Workflow{
+			Name:        tf.Name,
+			Description: tf.Description,
+			TemplateID:  tf.ID,
+			Status:      "active",
+		}
+		createdWf, err := workflows.CreateWorkflow(ctx, wf)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("create workflow: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Create nodes, mapping temp_id → real UUID
+		nodeMap := make(map[string]uuid.UUID)
+		for _, tn := range tf.Nodes {
+			agentID, ok := agentMap[tn.AgentRef]
+			if !ok {
+				http.Error(w, fmt.Sprintf("agent ref %s not found", tn.AgentRef), http.StatusInternalServerError)
+				return
+			}
+			n := workflow.WorkflowNode{
+				WorkflowID: createdWf.ID,
+				AgentID:    agentID,
+				Label:      tn.Label,
+				PositionX:  tn.PosX,
+				PositionY:  tn.PosY,
+				IsEntry:    tn.IsEntry,
+			}
+			createdNode, err := workflows.CreateNode(ctx, n)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("create node %s: %v", tn.Label, err), http.StatusInternalServerError)
+				return
+			}
+			nodeMap[tn.TempID] = createdNode.ID
+		}
+
+		// Create edges
+		for _, te := range tf.Edges {
+			sourceID, ok := nodeMap[te.SourceRef]
+			if !ok {
+				http.Error(w, fmt.Sprintf("source ref %s not found", te.SourceRef), http.StatusInternalServerError)
+				return
+			}
+			targetID, ok := nodeMap[te.TargetRef]
+			if !ok {
+				http.Error(w, fmt.Sprintf("target ref %s not found", te.TargetRef), http.StatusInternalServerError)
+				return
+			}
+			e := workflow.WorkflowEdge{
+				WorkflowID:   createdWf.ID,
+				SourceNodeID: sourceID,
+				TargetNodeID: targetID,
+				Condition:    te.Condition,
+				Priority:     te.Priority,
+			}
+			if _, err := workflows.CreateEdge(ctx, e); err != nil {
+				http.Error(w, fmt.Sprintf("create edge: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"workflow_id": createdWf.ID.String(),
+			"template_id": tf.ID,
+			"status":      "loaded",
+		})
 	}
 }
 
@@ -541,7 +751,12 @@ func whatsappWebhookHandler() http.HandlerFunc {
 
 func mockFailedTransactionsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Stub — will return hardcoded transactions in Phase 2
-		writeJSON(w, http.StatusOK, []any{})
+		now := time.Now()
+		txns := []map[string]any{
+			{"id": "txn_001", "amount": 99.99, "currency": "USD", "customer_phone": "+14405239475", "failure_reason": "insufficient_funds", "provider": "stripe", "failed_at": now.Add(-1 * time.Hour).Format(time.RFC3339)},
+			{"id": "txn_002", "amount": 249.00, "currency": "USD", "customer_phone": "+14405239475", "failure_reason": "card_declined", "provider": "adyen", "failed_at": now.Add(-55 * time.Minute).Format(time.RFC3339)},
+			{"id": "txn_003", "amount": 15.50, "currency": "EUR", "customer_phone": "+14405239475", "failure_reason": "expired_card", "provider": "checkout", "failed_at": now.Add(-30 * time.Minute).Format(time.RFC3339)},
+		}
+		writeJSON(w, http.StatusOK, txns)
 	}
 }

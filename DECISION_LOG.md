@@ -137,6 +137,17 @@
 
 ---
 
+## Use context.Background() for engine execution from HTTP handlers
+
+**Date:** 2026-04-04
+**Phase:** Phase 2 — Workflow Engine
+**Decision:** Pass `context.Background()` to `engine.Execute()` from the HTTP handler, not `r.Context()`.
+**Alternatives considered:** Using `r.Context()` (the HTTP request context).
+**Rationale:** The engine runs asynchronously in goroutines after the HTTP response is sent. Using `r.Context()` causes the context to be canceled when the HTTP handler returns, killing the engine goroutine. `context.Background()` allows the engine to run independently of the request lifecycle.
+**Consequences:** Engine execution is not tied to HTTP request cancellation. A separate cancel mechanism (per-execution cancel map) is needed for the stretch-goal cancel endpoint.
+
+---
+
 ## Goose CLI output format differs from STEPS.md assumptions
 
 **Date:** 2026-04-04
