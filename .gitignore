@@ -1,0 +1,29 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Go
+backend/vendor/
+*.test
+*.out
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Docker volumes
+postgres_data/
+
+# Goose session files
+~/.config/goose/sessions/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

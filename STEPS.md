@@ -65,6 +65,7 @@ If Goose CLI is flaky or output format can't be reliably parsed:
   mkdir -p backend/migrations backend/templates
   mkdir frontend
   ```
+- [ ] Create `DECISION_LOG.md` in the repo root with the pre-planned decisions from STEPS.md §6 as seed entries
 - [ ] Create `.env` from `.env.example`, fill in `ANTHROPIC_API_KEY`, Twilio creds, ngrok URL
 - [ ] Create `docker-compose.yml` with PostgreSQL health check (see CLAUDE.md for full config)
   - **Important:** The Docker Compose `backend` service uses `MAESTRO_RUNTIME=anthropic_direct` by default.
@@ -74,6 +75,58 @@ If Goose CLI is flaky or output format can't be reliably parsed:
     The Dockerfile does not need to install Goose.
 - [ ] Start PostgreSQL: `docker-compose up postgres`
 - [ ] Verify connection: `psql postgres://maestro:maestro@localhost:5432/maestro`
+
+**`docker-compose.yml`:**
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: maestro
+      POSTGRES_PASSWORD: maestro
+      POSTGRES_DB: maestro
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maestro -d maestro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://maestro:maestro@postgres:5432/maestro
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MAESTRO_RUNTIME: ${MAESTRO_RUNTIME:-anthropic_direct}   # Goose not in container
+      GOOSE_BINARY_PATH: ${GOOSE_BINARY_PATH:-/usr/local/bin/goose}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM}
+      MAX_ITERATIONS: ${MAX_ITERATIONS:-5}
+      AGENT_STEP_TIMEOUT_SECS: ${AGENT_STEP_TIMEOUT_SECS:-60}
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+```
+
 
 ---
 
@@ -162,10 +215,10 @@ Create numbered SQL files in `backend/migrations/`:
 ### 1.5 — Runtime layer
 
 - [ ] `internal/runtime/runner.go`: define `Runner` interface and `Usage`, `ErrStepTimeout` sentinel
-- [ ] `internal/runtime/goose.go`: `GooseRunner` implementing `Runner` (see CLAUDE.md for full implementation)
+- [ ] `internal/runtime/goose.go`: `GooseRunner` implementing `Runner` (see implementation sketch below)
   - `buildFullPrompt(agent, task)`: system prompt + memory key-value block + skills block + task
   - `parseOutput(raw)`: JSON unmarshal with fallback to raw text; estimate usage if `usage` field absent
-- [ ] `internal/runtime/anthropic_direct.go`: `AnthropicDirectRunner` implementing `Runner` (see CLAUDE.md)
+- [ ] `internal/runtime/anthropic_direct.go`: `AnthropicDirectRunner` implementing `Runner` (see implementation sketch below)
 - [ ] ~~`internal/runtime/guardrails.go`~~ — **do not create this file**.
   `CheckGuardrails` lives on the **workflow store** (`internal/workflow/store.go`), not the runtime package.
   Add this method to `workflow.Store` in §1.4:
@@ -175,6 +228,148 @@ Create numbered SQL files in `backend/migrations/`:
   - Returns `ErrCostLimitExceeded` or `ErrRateLimitExceeded`
   - Called as `e.workflows.CheckGuardrails(ctx, ag.ID, ag.Guardrails)` at the top of `runNode`
   - This avoids a separate `costStore` field on `Engine` and keeps all DB access through the workflow store
+
+#### Implementation sketches
+
+**`internal/runtime/prompt.go`** — two helpers used by both runners:
+```go
+// buildSystemPrompt: system prompt + memory key-values + skills. No task appended.
+// Used by AnthropicDirectRunner (task travels as the user message).
+func buildSystemPrompt(ag AgentWithMemory) string { ... }
+
+// buildFullPrompt: buildSystemPrompt output + "\n\nTask: " + task.
+// Used by GooseRunner (everything in one -t string).
+func buildFullPrompt(ag AgentWithMemory, task string) string { ... }
+```
+
+**`internal/runtime/goose.go`** — `GooseRunner`:
+```go
+type GooseRunner struct {
+    binaryPath string
+    apiKey     string
+    lastPrompt string // stored for token estimation fallback
+}
+
+// GooseOutput: update field names after Phase 0 verification.
+type GooseOutput struct {
+    Response string `json:"response"` // UPDATE if actual field name differs
+    Usage    *struct {
+        InputTokens  int `json:"input_tokens"`
+        OutputTokens int `json:"output_tokens"`
+    } `json:"usage,omitempty"`
+}
+
+func (r *GooseRunner) Run(ctx context.Context, ag AgentWithMemory, task string) (string, Usage, error) {
+    fullPrompt := buildFullPrompt(ag, task)
+    r.lastPrompt = fullPrompt
+    ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+    defer cancel()
+    cmd := exec.CommandContext(ctx, r.binaryPath, "run",
+        "--no-session", "--provider", "anthropic",
+        "--model", gooseModelName(ag.Model), // strips date suffix: "claude-sonnet-4-5-20250929" → "claude-sonnet-4-5"
+        "--output-format", "json",
+        "-t", fullPrompt,
+    )
+    cmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY="+r.apiKey)
+    var stdout, stderr bytes.Buffer
+    cmd.Stdout = &stdout
+    cmd.Stderr = &stderr
+    if err := cmd.Run(); err != nil {
+        if ctx.Err() == context.DeadlineExceeded { return "", Usage{}, ErrStepTimeout }
+        return "", Usage{}, fmt.Errorf("goose run: %w\nstderr: %s", err, stderr.String())
+    }
+    return r.parseOutput(stdout.Bytes(), ag.Model)
+}
+
+func (r *GooseRunner) parseOutput(raw []byte, model string) (string, Usage, error) {
+    var out GooseOutput
+    if err := json.Unmarshal(raw, &out); err != nil {
+        if start := bytes.IndexByte(raw, '{'); start >= 0 {
+            if err2 := json.Unmarshal(raw[start:], &out); err2 != nil {
+                return string(raw), r.estimateUsage(string(raw), model), nil
+            }
+        } else {
+            return string(raw), r.estimateUsage(string(raw), model), nil
+        }
+    }
+    usage := Usage{Source: "estimated"}
+    if out.Usage != nil {
+        usage.TokensIn = out.Usage.InputTokens
+        usage.TokensOut = out.Usage.OutputTokens
+        usage.Source = "goose_json"
+    } else {
+        usage = r.estimateUsage(out.Response, model)
+    }
+    usage.EstimatedCostUSD = estimateCost(usage.TokensIn, usage.TokensOut, model)
+    return out.Response, usage, nil
+}
+
+func (r *GooseRunner) estimateUsage(response, model string) Usage {
+    tokensIn, tokensOut := len(r.lastPrompt)/4, len(response)/4
+    return Usage{
+        TokensIn: tokensIn, TokensOut: tokensOut, Source: "estimated",
+        EstimatedCostUSD: estimateCost(tokensIn, tokensOut, model),
+        // Dashboard shows approximate cost (marked 'estimated') rather than $0.00.
+    }
+}
+```
+
+**`internal/runtime/anthropic_direct.go`** — `AnthropicDirectRunner`:
+```go
+func (r *AnthropicDirectRunner) Run(ctx context.Context, ag AgentWithMemory, task string) (string, Usage, error) {
+    payload := map[string]any{
+        "model": ag.Model, "max_tokens": 4096,
+        "system":   buildSystemPrompt(ag), // system + memory + skills; task is NOT appended here
+        "messages": []map[string]any{{"role": "user", "content": task}},
+    }
+    body, _ := json.Marshal(payload)
+    req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+    req.Header.Set("x-api-key", r.apiKey)
+    req.Header.Set("anthropic-version", "2023-06-01")
+    req.Header.Set("Content-Type", "application/json")
+    resp, err := r.client.Do(req)
+    if err != nil { return "", Usage{}, fmt.Errorf("anthropic API: %w", err) }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        body, _ := io.ReadAll(resp.Body)
+        return "", Usage{}, fmt.Errorf("anthropic API %d: %s", resp.StatusCode, body)
+    }
+    var result struct {
+        Content []struct{ Text string `json:"text"` } `json:"content"`
+        Usage   struct {
+            InputTokens  int `json:"input_tokens"`
+            OutputTokens int `json:"output_tokens"`
+        } `json:"usage"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return "", Usage{}, fmt.Errorf("anthropic decode: %w", err)
+    }
+    text := ""; if len(result.Content) > 0 { text = result.Content[0].Text }
+    usage := Usage{
+        TokensIn: result.Usage.InputTokens, TokensOut: result.Usage.OutputTokens,
+        Source: "anthropic_api",
+        EstimatedCostUSD: estimateCost(result.Usage.InputTokens, result.Usage.OutputTokens, ag.Model),
+    }
+    return text, usage, nil
+}
+```
+
+**`Runner` interface + `main.go` selection:**
+```go
+type Runner interface {
+    Run(ctx context.Context, ag AgentWithMemory, task string) (string, Usage, error)
+}
+
+// in main.go:
+var runner runtime.Runner
+switch os.Getenv("MAESTRO_RUNTIME") {
+case "anthropic_direct":
+    runner = runtime.NewAnthropicDirectRunner(os.Getenv("ANTHROPIC_API_KEY"))
+default: // "goose"
+    runner = runtime.NewGooseRunner(os.Getenv("GOOSE_BINARY_PATH"), os.Getenv("ANTHROPIC_API_KEY"))
+}
+```
+
 
 ### 1.6 — SSE broadcaster
 
@@ -215,6 +410,12 @@ Create numbered SQL files in `backend/migrations/`:
 
 **Checkpoint:** `go run ./cmd/server` starts cleanly, all stub routes return 200, `/api/events` keeps the connection open and streams nothing. `docker-compose up` brings up Postgres then backend without race condition.
 
+**Phase 1 tests to write before moving on:**
+- [ ] `internal/agent/store_test.go`: agent CRUD round-trip against real `maestro_test` DB (create → get → update → delete)
+- [ ] `internal/agent/store_test.go`: `GetWithMemory` returns correct memory map after `SetMemory` calls
+- [ ] Migration smoke test: `migrate up` runs cleanly, `migrate down` rolls back cleanly, `migrate up` again succeeds
+- [ ] `internal/sse/broadcaster_test.go`: subscribe → publish → receive; unsubscribe cleans up channel without goroutine leak
+
 ---
 
 ## Phase 2 — Workflow Engine (Saturday PM + evening, ~6 hours)
@@ -223,13 +424,112 @@ Create numbered SQL files in `backend/migrations/`:
 
 ### 2.1 — Event-driven execution engine
 
-- [ ] `internal/workflow/engine.go`: implement `Engine.Execute` and `Engine.runNode` (see CLAUDE.md for full implementation)
+- [ ] `internal/workflow/engine.go`: implement `Engine.Execute` and `Engine.runNode` (see implementation sketch below)
   - Entry: find `is_entry = true` node, dispatch via goroutine
   - Per step: `e.workflows.CheckGuardrails(ctx, ag.ID, ag.Guardrails)` (fail fast if cost/rate limit exceeded — routes cost queries through the workflow store, no separate costStore field on Engine) → run runtime (with 60s timeout ctx) → handle WhatsApp action if `ag.HasChannel("whatsapp")` → persist message → evaluate edges (first-match, priority ASC)
   - Iteration guard: `IncrementIterationCount` → fail if > MAX_ITERATIONS
   - Step timeout: `context.WithTimeout(ctx, 60s)` — map `ErrStepTimeout` → `timed_out` status
   - Terminal detection: no matching outgoing edge → `completed`
   - All SSE events published at each transition: `ExecutionStarted`, `AgentStarted`, `AgentCompleted`, `MessageDispatched`, `WhatsAppSent`, `ExecutionCompleted`, `ExecutionFailed`, `StepTimedOut`
+
+#### Engine implementation sketch
+
+**`internal/workflow/engine.go`:**
+```go
+const DefaultMaxIterations = 5
+
+type Engine struct {
+    agents   agent.Store
+    workflows workflow.Store // must implement CheckGuardrails(ctx, agentID, Guardrails) error
+    runtime  runtime.Runner
+    sse      *sse.Broadcaster
+    whatsapp channels.WhatsAppClient
+    // No separate costStore — guardrails route through e.workflows.CheckGuardrails
+}
+
+func (e *Engine) Execute(ctx context.Context, workflowID uuid.UUID, trigger string) (uuid.UUID, error) {
+    wf, err := e.workflows.GetFull(ctx, workflowID)
+    if err != nil { return uuid.Nil, err }
+    exec := &Execution{ID: uuid.New(), WorkflowID: &workflowID,
+        ExecutionType: "workflow", Status: "running", TriggeredBy: trigger}
+    e.workflows.CreateExecution(ctx, exec)
+    e.sse.Publish(Event{Type: "ExecutionStarted", ExecutionID: exec.ID})
+    entry := wf.EntryNode()
+    if entry == nil { return uuid.Nil, errors.New("no entry node found") }
+    go e.runNode(ctx, exec, wf, entry, "Start workflow")
+    return exec.ID, nil
+}
+
+func (e *Engine) runNode(ctx context.Context, exec *Execution, wf *Workflow, node *Node, input string) {
+    count := e.workflows.IncrementIterationCount(ctx, exec.ID)
+    if count > defaultInt(os.Getenv("MAX_ITERATIONS"), DefaultMaxIterations) {
+        e.failExecution(ctx, exec, "max iterations exceeded"); return
+    }
+    ag, err := e.agents.GetWithMemory(ctx, node.AgentID)
+    if err != nil { e.failExecution(ctx, exec, fmt.Sprintf("load agent %s: %v", node.AgentID, err)); return }
+    if err := e.workflows.CheckGuardrails(ctx, ag.ID, ag.Guardrails); err != nil {
+        e.failExecution(ctx, exec, fmt.Sprintf("guardrails: %v", err)); return
+    }
+    stepCtx, cancel := context.WithTimeout(ctx, stepTimeout())
+    defer cancel()
+    e.sse.Publish(Event{Type: "AgentStarted", ExecutionID: exec.ID, AgentID: node.AgentID})
+    output, usage, err := e.runtime.Run(stepCtx, ag, input)
+    if errors.Is(err, runtime.ErrStepTimeout) {
+        e.workflows.SetStatus(ctx, exec.ID, "timed_out")
+        e.sse.Publish(Event{Type: "StepTimedOut", ExecutionID: exec.ID, AgentID: node.AgentID}); return
+    }
+    if err != nil { e.failExecution(ctx, exec, err.Error()); return }
+    if ag.HasChannel("whatsapp") { e.handleWhatsAppAction(ctx, exec, ag, output) }
+    e.workflows.CreateMessage(ctx, exec.ID, node.AgentID, nil, output, "internal")
+    e.workflows.RecordCost(ctx, exec.ID, node.AgentID, usage)
+    e.sse.Publish(Event{Type: "AgentCompleted", ExecutionID: exec.ID, AgentID: node.AgentID})
+    // First-match edge evaluation (edges pre-sorted by priority ASC in SQL)
+    for _, edge := range wf.OutgoingEdges(node.ID) {
+        if evaluateCondition(output, edge.Condition) {
+            target := wf.Node(edge.TargetNodeID)
+            e.sse.Publish(Event{Type: "MessageDispatched", From: node.AgentID, To: target.AgentID})
+            go e.runNode(ctx, exec, wf, target, output)
+            return
+        }
+    }
+    // No matching edge = terminal node
+    e.workflows.SetStatus(ctx, exec.ID, "completed")
+    e.workflows.SetCompletedAt(ctx, exec.ID, time.Now())
+    e.sse.Publish(Event{Type: "ExecutionCompleted", ExecutionID: exec.ID})
+}
+
+// handleWhatsAppAction: only called when ag.HasChannel("whatsapp") is true.
+// Scans output for "ACTION:WHATSAPP: +number | message" lines.
+func (e *Engine) handleWhatsAppAction(ctx context.Context, exec *Execution, ag AgentWithMemory, output string) {
+    agentID := ag.ID
+    for _, line := range strings.Split(output, "\n") {
+        line = strings.TrimSpace(line)
+        if !strings.HasPrefix(line, "ACTION:WHATSAPP:") { continue }
+        parts := strings.SplitN(strings.TrimPrefix(line, "ACTION:WHATSAPP:"), "|", 2)
+        if len(parts) != 2 { continue }
+        to, msg := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+        if err := e.whatsapp.Send(ctx, to, msg); err != nil {
+            e.workflows.LogError(ctx, exec.ID, agentID, "WhatsApp send failed: "+err.Error())
+        } else {
+            e.workflows.CreateMessage(ctx, exec.ID, agentID, nil, msg, "whatsapp")
+            e.sse.Publish(Event{Type: "WhatsAppSent", ExecutionID: exec.ID, AgentID: agentID, To: to})
+        }
+    }
+}
+```
+
+**`internal/workflow/conditions.go`** — `evaluateCondition`:
+```go
+func evaluateCondition(output, condition string) bool {
+    switch strings.ToLower(strings.TrimSpace(condition)) {
+    case "always", "": return true
+    case "approved":   return strings.Contains(strings.ToUpper(output), "APPROVED")
+    case "rejected":   return strings.Contains(strings.ToUpper(output), "REJECTED")
+    default:           return strings.Contains(output, condition)
+    }
+}
+```
+
 
 - [ ] `internal/workflow/conditions.go`: `evaluateCondition(output, condition string) bool`
   - "always" / "" → true
@@ -281,6 +581,16 @@ Create numbered SQL files in `backend/migrations/`:
 - [ ] `backend/templates/connector-integration.json`: 3 nodes, **3 edges** (Scout→Builder always/p0, Builder→Reviewer always/p0, Reviewer→Builder rejected/p0). **No "approved" edge.** When the Reviewer outputs "APPROVED", the "rejected" condition does not match, no edge fires, and the engine's `no matching edge = terminal` rule marks execution completed. This avoids a phantom terminal node or a nullable `target_node_id` FK. Reviewer system prompt ends with: *"Your final line MUST be exactly 'APPROVED' or 'REJECTED: {reason}' — no other format is accepted."*
 
 **Checkpoint:** `POST /api/templates/nova-recovery/load` creates workflow + agents in DB. `POST /api/workflows/{id}/execute` triggers the engine. Backend logs show Goose (or direct API) being called per agent step. `agent_messages` rows appear in DB. SSE stream sends events (verify via `curl -N http://localhost:8080/api/events`).
+
+**Phase 2 tests to write before moving on:**
+- [ ] `internal/workflow/conditions_test.go` — *should already exist from Phase 2; verify coverage:* all condition variants (always, approved, rejected, substring, empty string)
+- [ ] `internal/workflow/conditions_test.go` — *should already exist from Phase 2; verify coverage:* output containing both APPROVED and REJECTED — first-match with priority-ordered slice picks correctly
+- [ ] `internal/workflow/engine_test.go` with mock `Runner`:
+  - Linear 2-node workflow completes, both `agent_messages` rows persisted
+  - Cycle guard: mock returns REJECTED 6 times — execution fails at iteration 5 with `max iterations exceeded`
+  - Approval path: mock returns APPROVED — no edge matches — execution status is `completed`, not `failed`
+  - Step timeout: mock sleeps 2s, timeout set to 1s — execution status is `timed_out`
+- [ ] `internal/workflow/store_test.go`: `GetFull` returns edges ordered by priority ASC regardless of insertion order
 
 ---
 
@@ -341,6 +651,11 @@ Create numbered SQL files in `backend/migrations/`:
 - [ ] Confirm all SSE events appear in browser console (`curl -N http://localhost:8080/api/events`)
 - [ ] Confirm execution reaches `completed` status in DB
 - [ ] Trigger Template 1 with "Stripe" — confirm Reviewer rejects once, Builder revises, Reviewer approves within 5 iterations
+
+**Phase 3 tests to write before moving on:**
+- [ ] `internal/channels/parse_test.go`: Twilio webhook body parsing — correct `from` and `body` extracted from form-encoded POST
+- [ ] `internal/channels/parse_test.go`: missing fields return appropriate errors
+- [ ] `internal/api/webhook_handler_test.go`: end-to-end with `NoopClient` — inbound message creates ad-hoc execution, agent runs, SSE event published
 
 ---
 
@@ -408,9 +723,15 @@ Create numbered SQL files in `backend/migrations/`:
 
 **Checkpoint:** Full happy-path demo works end-to-end in the browser. Agent CRUD, template load, workflow builder, execution trigger, WhatsApp message round-trip, monitoring dashboard live-updating.
 
+**Phase 4 tests to write before moving on:**
+- [ ] `lib/sse.test.ts`: `useSSE` hook connects, receives typed events, calls `EventSource.close()` on unmount — no listener leak
+- [ ] `components/agents/AgentModal.test.tsx`: renders all tabs, Basic tab form submission calls `POST /api/agents` with correct payload
+
 ---
 
 ## Phase 5 — Tests (Sunday PM, ~1.5 hours)
+
+> Most tests should already be written during their respective phases (see per-phase test checklists above). Phase 5 is for filling any gaps, running the full suite, and adding any cross-cutting tests that only make sense once all layers exist.
 
 ### Backend tests
 
@@ -425,8 +746,8 @@ createdb -h localhost -p 5432 -U maestro maestro_test
 
 Set `DATABASE_URL_TEST=postgres://maestro:maestro@localhost:5432/maestro_test` in your shell or `.env.test`. Do **not** create a separate local PostgreSQL installation — that will conflict with the Docker Compose port binding.
 
-- [ ] `internal/agent/store_test.go`: agent CRUD round-trip (create, get, update, delete)
-- [ ] `internal/workflow/conditions_test.go`:
+- [ ] `internal/agent/store_test.go`: agent CRUD round-trip (create, get, update, delete) — *should already exist from Phase 1; verify and expand if needed*
+- [ ] `internal/workflow/conditions_test.go` — *should already exist from Phase 2; verify coverage:*
   - "always" matches anything
   - "approved" matches output containing "APPROVED" (case-insensitive)
   - "rejected" matches "REJECTED" but not "APPROVED"
@@ -449,7 +770,11 @@ Set `DATABASE_URL_TEST=postgres://maestro:maestro@localhost:5432/maestro_test` i
 
 ## Phase 6 — Documentation + Demo Recording (Sunday PM, ~1.5 hours)
 
-### DECISION_LOG.md — write one entry per decision
+### DECISION_LOG.md — seed from planning + add ongoing decisions
+
+> Any decision made during the build that isn't explicitly prescribed in STEPS.md must be logged here before moving to the next phase. See CLAUDE.md §Decision Log for the required format.
+
+**Seed entries (pre-planned decisions to add at project start):**
 
 - [ ] Why Goose over OpenClaw/OpenCode (most mature extension API; Block's fintech credibility)
 - [ ] Why Go backend (Yuno's primary language; goroutines for concurrent agent execution; explicit control)
@@ -495,7 +820,20 @@ Set `DATABASE_URL_TEST=postgres://maestro:maestro@localhost:5432/maestro_test` i
 
 - [ ] Clean environment: `docker-compose down -v && docker-compose up` from scratch
 - [ ] Open OBS or QuickTime (screen + mic)
-- [ ] Follow demo script from CLAUDE.md exactly — it's structured for maximum impact with a Yuno interviewer
+- [ ] Follow this script exactly — structured for maximum impact with a Yuno interviewer:
+  1. `docker-compose up` from scratch — show PostgreSQL health check passing before backend connects.
+  2. Open browser → Templates → load **"Failed Transaction Recovery Pipeline (NOVA)"**.
+  3. Say verbally: *"This template is a miniaturized version of Yuno's NOVA product — AI agents recovering failed payments by contacting customers via WhatsApp. Template 1 mirrors your PSP connector onboarding workflow."*
+  4. Show the React Flow canvas: Transaction Monitor → Recovery Orchestrator → Reconciliation Reporter.
+  5. Click **Run Workflow** → monitoring dashboard opens automatically.
+  6. Watch agent status cards flip: idle → running → completed, left to right, driven by SSE.
+  7. Show inter-agent messages appearing in the timeline as each step completes.
+  8. WhatsApp message arrives on phone — show screen to camera.
+  9. Reply from phone — show the response appearing in the monitoring dashboard under external channel messages.
+  10. Show the Reconciliation Reporter's final summary in the log (recovered count, escalated count).
+  11. Briefly: load **"Payment Connector Integration Pipeline"**, trigger with "Stripe". Show Reviewer rejecting once (`REJECTED: missing idempotency key handling`), Builder revising, Reviewer approving (`APPROVED`).
+      - The Connector Scout generates a plausible Stripe API spec from training knowledge (no live web scraping by default). Frame as: "the Scout reasons from its knowledge of Stripe's API."
+  12. Close: *"Both templates are themed around Yuno's actual engineering challenges. I built them after studying your NOVA product and your Core Payments integration workflow."*
 - [ ] Cover both templates in under 2 minutes
 - [ ] Upload as MP4 or GIF (< 100MB); link in README
 
