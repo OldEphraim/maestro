@@ -1,0 +1,42 @@
+
+    __( O)>  ● new session · anthropic claude-sonnet-4-5
+   \____)    20260404_2 · /Users/a8garber/Projects/Gauntlet/Yuno/maestro
+     L L     goose is ready
+{
+  "messages": [
+    {
+      "id": null,
+      "role": "user",
+      "created": 1775320541,
+      "content": [
+        {
+          "type": "text",
+          "text": "Reply with exactly the word: PONG"
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    },
+    {
+      "id": "msg_012oowym9WHtnra5qZ3ExitS",
+      "role": "assistant",
+      "created": 1775320542,
+      "content": [
+        {
+          "type": "text",
+          "text": "PONG"
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    }
+  ],
+  "metadata": {
+    "total_tokens": 4305,
+    "status": "completed"
+  }
+}
