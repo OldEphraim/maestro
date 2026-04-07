@@ -143,14 +143,7 @@ func main() {
 		} else {
 			defer tun.Close()
 			tunnelURL := tun.URL()
-			log.Printf("ngrok tunnel established: %s", tunnelURL)
-
-			// Log the webhook URL for Twilio sandbox configuration.
-			// The sandbox webhook can only be configured through the Twilio Console
-			// (there is no REST API for sandbox webhook updates).
-			webhookURL := tunnelURL + "/api/webhooks/whatsapp"
-			log.Printf("WhatsApp webhook URL: %s", webhookURL)
-			log.Println("Set this URL in the Twilio sandbox console: https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn")
+			log.Printf("ngrok tunnel active — WhatsApp webhook: %s/api/webhooks/whatsapp", tunnelURL)
 
 			// Serve via ngrok tunnel in background
 			go func() {
