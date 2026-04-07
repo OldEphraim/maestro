@@ -288,3 +288,14 @@
 **Alternatives considered:** (1) Leave pooling off and rely on the stale session expiring before restarting. (2) Use the ngrok API to force-disconnect stale sessions (requires a separate API key).
 **Rationale:** Without pooling, if the server is killed without a graceful shutdown (e.g. `kill -9`, crash, power loss), the stale ngrok session blocks new connections to the same domain until it expires server-side (can take several minutes). With pooling enabled, ngrok treats the new connection as a pool member and routes traffic to it immediately. This is the intended solution per ngrok's own error message.
 **Consequences:** Traffic to the reserved domain is load-balanced if multiple instances connect simultaneously. For a single-instance demo this is a no-op — the behavior is identical to non-pooled mode.
+
+---
+
+## Stale ngrok endpoint cleanup on startup via API
+
+**Date:** 2026-04-07
+**Phase:** Phase 3 — External Channel
+**Decision:** On startup, if `NGROK_API_KEY` is set, the server lists endpoints via `GET https://api.ngrok.com/endpoints`, finds any matching the reserved domain, and sends `POST /tunnel_sessions/{id}/stop` to tear them down. The server also registers `ngrok.WithStopHandler` so that future sessions support remote stop commands. This is a best-effort safety net alongside pooling.
+**Alternatives considered:** (1) `DELETE /endpoints/{id}` (returns 404 for ephemeral endpoints — not supported). (2) Rotating the authtoken programmatically (API only supports PATCH description, not token rotation). (3) Relying solely on pooling.
+**Rationale:** Pooling handles the common case (new session coexists with stale one), but the stop command can actively tear down a stale session if it was started with `WithStopHandler`. Together they cover both the "stale session supports remote stop" and "stale session doesn't support remote stop" cases. The `context.Background()` fix for `ngrok.Listen` ensures the tunnel stays alive after connection (previously the timeout context's cancel was closing the listener immediately).
+**Consequences:** Requires `NGROK_API_KEY` env var (from dashboard.ngrok.com → API). Without it, cleanup is skipped and pooling alone handles restarts. Added 2-second sleep after successful cleanup to let ngrok's servers process the teardown.

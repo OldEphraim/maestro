@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -107,21 +110,32 @@ func main() {
 
 	ngrokAuthToken := os.Getenv("NGROK_AUTH_TOKEN")
 	if ngrokAuthToken != "" {
-		// Start ngrok tunnel (30s timeout so we don't block forever on auth issues)
+		// Clean up stale ngrok endpoints before connecting
+		ngrokDomain := os.Getenv("NGROK_DOMAIN")
+		if apiKey := os.Getenv("NGROK_API_KEY"); apiKey != "" && ngrokDomain != "" {
+			cleanupStaleNgrokEndpoints(apiKey, ngrokDomain)
+		}
+
+		// Start ngrok tunnel. The context governs the tunnel's lifetime, so we
+		// use Background() — not a timeout context — to keep it alive. The SDK
+		// has its own internal connect timeout.
 		log.Println("NGROK_AUTH_TOKEN set — starting ngrok tunnel...")
-		tunnelCtx, tunnelCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		endpointOpts := []ngrokconfig.HTTPEndpointOption{
 			ngrokconfig.WithPoolingEnabled(true),
 		}
-		if domain := os.Getenv("NGROK_DOMAIN"); domain != "" {
-			endpointOpts = append(endpointOpts, ngrokconfig.WithDomain(domain))
-			log.Printf("using reserved ngrok domain: %s", domain)
+		if ngrokDomain != "" {
+			endpointOpts = append(endpointOpts, ngrokconfig.WithDomain(ngrokDomain))
+			log.Printf("using reserved ngrok domain: %s", ngrokDomain)
 		}
-		tun, err := ngrok.Listen(tunnelCtx,
+		tun, err := ngrok.Listen(context.Background(),
 			ngrokconfig.HTTPEndpoint(endpointOpts...),
 			ngrok.WithAuthtoken(ngrokAuthToken),
+			ngrok.WithStopHandler(func(ctx context.Context, sess ngrok.Session) error {
+				log.Println("ngrok remote stop requested — shutting down")
+				os.Exit(0)
+				return nil
+			}),
 		)
-		tunnelCancel()
 
 		if err != nil {
 			log.Printf("WARNING: ngrok tunnel failed: %v", err)
@@ -154,6 +168,85 @@ func main() {
 	log.Printf("starting server on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+// cleanupStaleNgrokEndpoints finds any existing ngrok endpoints on the reserved
+// domain and stops their tunnel sessions via the ngrok API. This handles the case
+// where a previous server instance was killed without graceful shutdown.
+func cleanupStaleNgrokEndpoints(apiKey, domain string) {
+	log.Println("checking for stale ngrok endpoints...")
+
+	req, err := http.NewRequest("GET", "https://api.ngrok.com/endpoints", nil)
+	if err != nil {
+		log.Printf("WARNING: ngrok cleanup: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Ngrok-Version", "2")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("WARNING: ngrok cleanup request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		log.Printf("WARNING: ngrok endpoints API returned %d: %s", resp.StatusCode, string(body))
+		return
+	}
+
+	var result struct {
+		Endpoints []struct {
+			ID            string `json:"id"`
+			Hostport      string `json:"hostport"`
+			TunnelSession struct {
+				ID string `json:"id"`
+			} `json:"tunnel_session"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		log.Printf("WARNING: ngrok cleanup decode: %v", err)
+		return
+	}
+
+	stopped := 0
+	for _, ep := range result.Endpoints {
+		if ep.Hostport == domain+":443" || ep.Hostport == domain || strings.HasPrefix(ep.Hostport, domain) {
+			sessionID := ep.TunnelSession.ID
+			if sessionID == "" {
+				continue
+			}
+			log.Printf("stopping stale tunnel session %s for endpoint %s", sessionID, ep.ID)
+			stopReq, err := http.NewRequest("POST", "https://api.ngrok.com/tunnel_sessions/"+sessionID+"/stop", strings.NewReader("{}"))
+			if err != nil {
+				continue
+			}
+			stopReq.Header.Set("Authorization", "Bearer "+apiKey)
+			stopReq.Header.Set("Ngrok-Version", "2")
+			stopReq.Header.Set("Content-Type", "application/json")
+			stopResp, err := http.DefaultClient.Do(stopReq)
+			if err != nil {
+				log.Printf("WARNING: failed to stop session %s: %v", sessionID, err)
+				continue
+			}
+			stopResp.Body.Close()
+			if stopResp.StatusCode < 300 || stopResp.StatusCode == 204 {
+				stopped++
+			} else {
+				respBody, _ := io.ReadAll(stopResp.Body)
+				log.Printf("WARNING: stop session %s returned %d: %s", sessionID, stopResp.StatusCode, string(respBody))
+			}
+		}
+	}
+
+	if stopped > 0 {
+		log.Printf("stopped %d stale ngrok session(s) — waiting for cleanup", stopped)
+		time.Sleep(2 * time.Second)
+	} else {
+		log.Println("no stale ngrok endpoints found")
 	}
 }
 
