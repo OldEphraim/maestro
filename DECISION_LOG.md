@@ -299,3 +299,14 @@
 **Alternatives considered:** (1) `DELETE /endpoints/{id}` (returns 404 for ephemeral endpoints — not supported). (2) Rotating the authtoken programmatically (API only supports PATCH description, not token rotation). (3) Relying solely on pooling.
 **Rationale:** Pooling handles the common case (new session coexists with stale one), but the stop command can actively tear down a stale session if it was started with `WithStopHandler`. Together they cover both the "stale session supports remote stop" and "stale session doesn't support remote stop" cases. The `context.Background()` fix for `ngrok.Listen` ensures the tunnel stays alive after connection (previously the timeout context's cancel was closing the listener immediately).
 **Consequences:** Requires `NGROK_API_KEY` env var (from dashboard.ngrok.com → API). Without it, cleanup is skipped and pooling alone handles restarts. Added 2-second sleep after successful cleanup to let ngrok's servers process the teardown.
+
+---
+
+## Replace channels text input with checkboxes
+
+**Date:** 2026-04-07
+**Phase:** Phase 4 — Frontend
+**Decision:** Replaced the comma-separated text input for agent channels with a set of checkboxes (Internal, WhatsApp). The underlying data format is unchanged — a JSON array of strings sent to the API.
+**Alternatives considered:** (1) Multi-select dropdown. (2) Tag input with autocomplete.
+**Rationale:** There are only two supported channels. Checkboxes are the simplest UX for a small, fixed set of options — no parsing errors, no ambiguity about separators, and the state is immediately visible. A multi-select or tag input would be over-engineering for two options.
+**Consequences:** Adding a new channel requires adding one entry to the checkbox array in AgentModal.tsx. The `channels` state changed from `string` to `string[]`, and the `handleSaveBasic` function no longer splits on commas.

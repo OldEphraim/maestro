@@ -19,7 +19,7 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
   const [role, setRole] = useState(agent?.role || '');
   const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt || '');
   const [model, setModel] = useState(agent?.model || 'claude-sonnet-4-5-20250929');
-  const [channels, setChannels] = useState(agent?.channels?.join(', ') || 'internal');
+  const [channels, setChannels] = useState<string[]>(agent?.channels?.length ? agent.channels : ['internal']);
   const [maxTokens, setMaxTokens] = useState(agent?.guardrails?.max_tokens_per_run || 0);
   const [maxRuns, setMaxRuns] = useState(agent?.guardrails?.max_runs_per_hour || 0);
   const [memEntries, setMemEntries] = useState<{ key: string; value: string }[]>(
@@ -77,7 +77,7 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
       const data = {
         name, role, system_prompt: systemPrompt, model,
         tools: [] as string[],
-        channels: channels.split(',').map(c => c.trim()).filter(Boolean),
+        channels,
         guardrails: { max_tokens_per_run: maxTokens, max_runs_per_hour: maxRuns },
       };
       if (isEdit && agent) {
@@ -154,8 +154,26 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
                 <input value={model} onChange={e => setModel(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
               </div>
               <div>
-                <label className="block text-sm text-slate-400 mb-1">Channels (comma-separated)</label>
-                <input value={channels} onChange={e => setChannels(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                <label className="block text-sm text-slate-400 mb-1">Channels</label>
+                <div className="flex gap-4">
+                  {[{ value: 'internal', label: 'Internal' }, { value: 'whatsapp', label: 'WhatsApp' }].map(ch => (
+                    <label key={ch.value} className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={channels.includes(ch.value)}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setChannels([...channels, ch.value]);
+                          } else {
+                            setChannels(channels.filter(c => c !== ch.value));
+                          }
+                        }}
+                        className="rounded border-slate-600"
+                      />
+                      {ch.label}
+                    </label>
+                  ))}
+                </div>
               </div>
               <button onClick={handleSaveBasic} disabled={saving} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-sm">
                 {saving ? 'Saving...' : isEdit ? 'Update Agent' : 'Create Agent'}

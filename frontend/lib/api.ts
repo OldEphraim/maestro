@@ -9,7 +9,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const text = await res.text();
     throw new Error(`API ${res.status}: ${text}`);
   }
-  return res.json();
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text);
 }
 
 // --- Types ---
