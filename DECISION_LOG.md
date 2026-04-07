@@ -255,3 +255,25 @@
 **Alternatives considered:** (1) Unit tests mocking the store layer. (2) External test process hitting a running server.
 **Rationale:** The handler tests need to verify that the router correctly dispatches requests AND that the handler logic correctly creates the expected DB records. Mocking the store would not catch SQL or routing bugs. An external test process adds deployment complexity. `httptest` + real DB is the sweet spot for handler integration tests, consistent with the existing `engine_test.go` pattern.
 **Consequences:** Tests require a running PostgreSQL with `maestro_test` database. The cleanup block in `testPool` truncates all tables after each test to prevent cross-test contamination.
+
+---
+
+## Automatic ngrok tunnel and Twilio webhook configuration on startup
+
+**Date:** 2026-04-07
+**Phase:** Phase 3 — External Channel
+**Decision:** When `NGROK_AUTH_TOKEN` is set, the backend automatically starts an ngrok tunnel using the official Go SDK (`golang.ngrok.com/ngrok`). The tunnel URL is logged at startup so the user can paste it into the Twilio sandbox console (one-time setup with a reserved domain). The Twilio sandbox webhook cannot be updated programmatically — there is no REST API for it, and the Messaging v2 Senders API returns an empty list for sandbox numbers.
+**Alternatives considered:** (1) Keep manual ngrok + Twilio console setup. (2) Use ngrok CLI subprocess instead of the Go SDK. (3) Auto-update the Twilio webhook via REST API (investigated; not possible for sandbox).
+**Rationale:** The manual setup required running `ngrok http 8080` in a separate terminal, copying the URL, and pasting it. The Go SDK eliminates the separate process — `ngrok.Listen` returns a `net.Listener` that `http.Serve` accepts directly, and the tunnel lifecycle is tied to the server process. With a reserved domain (`NGROK_DOMAIN`), the URL is stable across restarts, so the Twilio console only needs to be configured once.
+**Consequences:** Added `golang.ngrok.com/ngrok` dependency. `NGROK_URL` env var removed (URL is determined at runtime). When ngrok is active, the server listens on both the ngrok tunnel (for external Twilio webhooks) and localhost (for the frontend and internal requests). When `NGROK_AUTH_TOKEN` is not set, behavior is unchanged. If the tunnel fails to connect (e.g. stale session on free plan), the server falls back to local-only mode gracefully.
+
+---
+
+## Reserved ngrok domain via NGROK_DOMAIN env var
+
+**Date:** 2026-04-07
+**Phase:** Phase 3 — External Channel
+**Decision:** Added `NGROK_DOMAIN` env var. When set, the ngrok tunnel uses a fixed reserved domain (e.g. `my-app.ngrok-free.app`) via `ngrokconfig.WithDomain()` instead of a random URL. This means the Twilio webhook URL is stable across server restarts.
+**Alternatives considered:** (1) Always use random domains and re-configure Twilio on every startup. (2) Store the last-used URL and skip Twilio update if unchanged.
+**Rationale:** With a Hobby+ plan, ngrok provides a free reserved domain. A fixed domain eliminates the need to update the Twilio webhook on every restart — configure it once and forget. The implementation is a single optional config option passed to `ngrokconfig.HTTPEndpoint()`.
+**Consequences:** Users on the free ngrok plan still get random domains (NGROK_DOMAIN left empty). Hobby+ users set it once. The Twilio auto-update still runs on every startup as a safety net, but it's a no-op if the URL hasn't changed.

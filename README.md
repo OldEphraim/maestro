@@ -44,7 +44,7 @@ graph LR
 - Anthropic API key
 - (Optional) Goose CLI for local `goose` runtime: `brew install block-goose-cli`
 - (Optional) Twilio account for WhatsApp integration
-- (Optional) ngrok for WhatsApp webhook development
+- (Optional) ngrok authtoken for automatic WhatsApp webhook tunneling (get it at [dashboard.ngrok.com](https://dashboard.ngrok.com/get-started/your-authtoken))
 
 ### Quick Start
 
@@ -55,15 +55,10 @@ graph LR
    cp .env.example .env
    # Fill in ANTHROPIC_API_KEY (required)
    # Fill in TWILIO_* credentials (optional, for WhatsApp)
+   # Fill in NGROK_AUTH_TOKEN and NGROK_DOMAIN (optional — enables automatic ngrok tunnel on startup)
    ```
 
-2. (Optional) Set up WhatsApp:
-   ```bash
-   ngrok http 8080
-   # Copy the HTTPS URL and set it in the Twilio sandbox webhook configuration:
-   # https://<ngrok-url>/api/webhooks/whatsapp
-   # Update NGROK_URL in .env
-   ```
+2. (One-time, if using WhatsApp) Start the backend, copy the webhook URL from the logs, and paste it into the Twilio sandbox console under "When a message comes in": https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn. With a reserved ngrok domain, this URL is stable across restarts.
 
 3. Start everything:
    ```bash

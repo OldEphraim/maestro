@@ -19,6 +19,8 @@ import (
 	"github.com/oldephraim/maestro/backend/internal/scheduler"
 	"github.com/oldephraim/maestro/backend/internal/sse"
 	"github.com/oldephraim/maestro/backend/internal/workflow"
+	ngrok "golang.ngrok.com/ngrok"
+	ngrokconfig "golang.ngrok.com/ngrok/config"
 )
 
 func main() {
@@ -100,8 +102,53 @@ func main() {
 	// Initialize router
 	router := api.NewRouter(agentStore, workflowStore, broadcaster, engine, templatesDir)
 
-	// Start server
+	// Start server — with optional ngrok tunnel
 	addr := fmt.Sprintf(":%s", port)
+
+	ngrokAuthToken := os.Getenv("NGROK_AUTH_TOKEN")
+	if ngrokAuthToken != "" {
+		// Start ngrok tunnel (30s timeout so we don't block forever on auth issues)
+		log.Println("NGROK_AUTH_TOKEN set — starting ngrok tunnel...")
+		tunnelCtx, tunnelCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		endpointOpts := []ngrokconfig.HTTPEndpointOption{}
+		if domain := os.Getenv("NGROK_DOMAIN"); domain != "" {
+			endpointOpts = append(endpointOpts, ngrokconfig.WithDomain(domain))
+			log.Printf("using reserved ngrok domain: %s", domain)
+		}
+		tun, err := ngrok.Listen(tunnelCtx,
+			ngrokconfig.HTTPEndpoint(endpointOpts...),
+			ngrok.WithAuthtoken(ngrokAuthToken),
+		)
+		tunnelCancel()
+
+		if err != nil {
+			log.Printf("WARNING: ngrok tunnel failed: %v", err)
+			log.Println("falling back to local-only mode — WhatsApp inbound webhooks won't work")
+		} else {
+			defer tun.Close()
+			tunnelURL := tun.URL()
+			log.Printf("ngrok tunnel established: %s", tunnelURL)
+
+			// Log the webhook URL for Twilio sandbox configuration.
+			// The sandbox webhook can only be configured through the Twilio Console
+			// (there is no REST API for sandbox webhook updates).
+			webhookURL := tunnelURL + "/api/webhooks/whatsapp"
+			log.Printf("WhatsApp webhook URL: %s", webhookURL)
+			log.Println("Set this URL in the Twilio sandbox console: https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn")
+
+			// Serve via ngrok tunnel in background
+			go func() {
+				log.Printf("serving via ngrok tunnel: %s", tunnelURL)
+				if err := http.Serve(tun, router); err != nil {
+					log.Printf("ngrok listener closed: %v", err)
+				}
+			}()
+		}
+	} else {
+		log.Println("WARNING: NGROK_AUTH_TOKEN not set — WhatsApp inbound webhooks won't work without it")
+	}
+
+	// Always listen locally
 	log.Printf("starting server on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("server: %v", err)
