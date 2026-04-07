@@ -1,93 +1,177 @@
-# maestro
+# Maestro
 
+AI Agent Orchestration Platform. Create AI agents, configure their behavior, and connect them into visual multi-agent workflows that execute in real time.
 
+## Yuno Context
 
-## Getting started
+Built as a hiring assessment for [Yuno](https://y.uno). Both workflow templates are domain-specific: **Template 2** is a miniaturized version of Yuno's **NOVA AI payment recovery product**; **Template 1** mirrors Yuno's **PSP connector onboarding workflow**. Architecture choices (Go, PostgreSQL, event-driven execution) deliberately mirror Yuno's stack.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Architecture
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```mermaid
+graph LR
+    WA[WhatsApp] -->|inbound message| TW[Twilio Sandbox]
+    TW -->|webhook POST| BE[Go Backend :8080]
+    FE[Next.js Frontend :3000] -->|REST API| BE
+    FE -->|SSE stream| BE
+    BE -->|spawns subprocess| GS[Goose CLI]
+    GS -->|LLM calls| AN[Anthropic API]
+    BE -->|direct fallback| AN
+    BE -->|reads/writes| PG[(PostgreSQL :5432)]
+    BE -->|outbound message| TW
+    TW -->|WhatsApp reply| WA
 ```
-cd existing_repo
-git remote add origin https://labs.gauntletai.com/alangarber/maestro.git
-git branch -M main
-git push -uf origin main
+
+## Stack
+
+| Layer | Technology | Rationale |
+|---|---|---|
+| Backend | Go | Matches Yuno's primary language; goroutines for concurrent agent execution |
+| Database | PostgreSQL | ACID guarantees for workflow state and message history |
+| Router | Chi | Lightweight, idiomatic Go, no framework magic |
+| Agent Runtime | Goose (Block) + Anthropic Direct fallback | Best extension API; Block's fintech credibility |
+| External Channel | WhatsApp via Twilio Sandbox | Legitimate API, 5-minute setup |
+| Frontend | Next.js 16 + TypeScript | App Router, fast iteration |
+| Workflow Visualization | React Flow (@xyflow/react) | Standard for node-based workflow UIs |
+| Real-time | SSE (Server-Sent Events) | Simpler than WebSocket for unidirectional monitoring |
+| Orchestration | Docker Compose | Single `docker-compose up` runs everything |
+
+## Setup
+
+### Prerequisites
+
+- Docker Desktop running
+- Anthropic API key
+- (Optional) Goose CLI for local `goose` runtime: `brew install block-goose-cli`
+- (Optional) Twilio account for WhatsApp integration
+- (Optional) ngrok for WhatsApp webhook development
+
+### Quick Start
+
+1. Clone and configure:
+   ```bash
+   git clone https://labs.gauntletai.com/alangarber/maestro.git
+   cd maestro
+   cp .env.example .env
+   # Fill in ANTHROPIC_API_KEY (required)
+   # Fill in TWILIO_* credentials (optional, for WhatsApp)
+   ```
+
+2. (Optional) Set up WhatsApp:
+   ```bash
+   ngrok http 8080
+   # Copy the HTTPS URL and set it in the Twilio sandbox webhook configuration:
+   # https://<ngrok-url>/api/webhooks/whatsapp
+   # Update NGROK_URL in .env
+   ```
+
+3. Start everything:
+   ```bash
+   docker compose up
+   ```
+
+4. Open [http://localhost:3000](http://localhost:3000)
+
+5. Load a template from the Templates page and run it.
+
+### Running Locally (without Docker)
+
+```bash
+# Terminal 1: PostgreSQL
+docker compose up postgres
+
+# Terminal 2: Backend
+cd backend
+export $(grep -v '^#' ../.env | grep -v '^\s*$' | sed 's/ *#.*//' | sed 's/[[:space:]]*$//' | xargs)
+export DATABASE_URL="postgres://maestro:maestro@localhost:5432/maestro?sslmode=disable"
+export MAESTRO_RUNTIME=anthropic_direct
+go run ./cmd/server
+
+# Terminal 3: Frontend
+cd frontend
+NEXT_PUBLIC_API_URL=http://localhost:8080 npm run dev
 ```
 
-## Integrate with your tools
+## Runtime Choice
 
-* [Set up project integrations](https://labs.gauntletai.com/alangarber/maestro/-/settings/integrations)
+Maestro supports two agent runtimes, selected via the `MAESTRO_RUNTIME` environment variable:
 
-## Collaborate with your team
+**`goose` (default locally)** — Uses [Goose](https://block.github.io/goose/) by Block (the company behind Square and Cash App). Goose has the most mature extension API of any open-source agent framework, is provider-agnostic, and its fintech pedigree is directly relevant to Yuno's domain. The agent runs as a subprocess via `goose run --no-session --provider anthropic --output-format json`.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+**`anthropic_direct` (Docker default)** — Calls the Anthropic Messages API directly from Go. This eliminates the subprocess dependency, provides exact token counts (vs. Goose's estimated totals), and works in Docker containers where Goose CLI isn't installed.
 
-## Test and Deploy
+Both runtimes share the same prompt-building helpers (`buildSystemPrompt`, `buildFullPrompt`) and the same `Runner` interface, making them interchangeable. The `agents.model` column always stores the canonical Anthropic model string (e.g., `claude-sonnet-4-5-20250929`); `GooseRunner` strips the date suffix at runtime.
 
-Use the built-in continuous integration in GitLab.
+## Workflow Templates
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+### Template 1: Payment Connector Integration Pipeline
 
-***
+Mirrors Yuno's Core Payments PSP onboarding workflow. Three agents in a cycle:
 
-# Editing this README
+- **Connector Scout** — Researches a PSP's API and produces a structured specification
+- **Connector Builder** — Generates a Go adapter stub implementing the PaymentConnector interface
+- **Compliance Reviewer** — Reviews for PCI DSS compliance, rate limiting, idempotency. Outputs "APPROVED" or "REJECTED: {reason}"
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+The Reviewer's rejection loops back to the Builder (cycle), capped at 5 iterations.
 
-## Suggestions for a good README
+### Template 2: Failed Transaction Recovery Pipeline (NOVA)
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+A miniaturized version of Yuno's NOVA product. Linear pipeline:
 
-## Name
-Choose a self-explaining name for your project.
+- **Transaction Monitor** — Identifies failed transactions (simulated or from mock API)
+- **Recovery Orchestrator** — Decides retry/WhatsApp contact/escalate per transaction; sends WhatsApp messages via `ACTION:WHATSAPP:` lines
+- **Reconciliation Reporter** — Produces a summary report with recovery rates
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Extending
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### Adding a New Workflow Template
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Create a JSON file in `backend/templates/` following the schema of existing templates:
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```json
+{
+  "id": "my-template",
+  "name": "My Template",
+  "description": "...",
+  "agents": [{ "temp_id": "agent-1", "name": "...", "role": "...", "system_prompt": "...", "model": "claude-sonnet-4-5-20250929", "tools": [], "channels": [] }],
+  "nodes": [{ "temp_id": "node-1", "agent_ref": "agent-1", "label": "...", "position_x": 100, "position_y": 200, "is_entry": true }],
+  "edges": [{ "source_ref": "node-1", "target_ref": "node-2", "condition": "always", "priority": 0 }]
+}
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### Adding a New Messaging Channel
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+1. Implement the `WhatsAppClient` interface in `internal/channels/`:
+   ```go
+   type MyChannelClient interface {
+       Send(ctx context.Context, to, message string) error
+   }
+   ```
+2. Add a webhook handler in `internal/api/` for inbound messages
+3. Register the handler in `internal/api/router.go`
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Testing
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```bash
+# Backend (requires PostgreSQL running)
+cd backend
+go test ./internal/... -v -p 1
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+# Frontend
+cd frontend
+npm test
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Environment Variables
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+See `.env.example` for the full list. Key variables:
 
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for LLM calls |
+| `MAESTRO_RUNTIME` | No | `goose` (default) or `anthropic_direct` |
+| `TWILIO_ACCOUNT_SID` | No | Twilio account SID for WhatsApp |
+| `TWILIO_AUTH_TOKEN` | No | Twilio auth token |
+| `TWILIO_WHATSAPP_FROM` | No | Twilio sandbox WhatsApp number |
+| `MAX_ITERATIONS` | No | Max agent steps per execution (default: 5) |
+| `AGENT_STEP_TIMEOUT_SECS` | No | Per-step timeout in seconds (default: 60) |

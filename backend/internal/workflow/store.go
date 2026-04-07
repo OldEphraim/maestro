@@ -124,6 +124,16 @@ func (s *Store) CreateEdge(ctx context.Context, e WorkflowEdge) (WorkflowEdge, e
 	return e, nil
 }
 
+func (s *Store) UpdateEdge(ctx context.Context, e WorkflowEdge) (WorkflowEdge, error) {
+	_, err := s.db.Exec(ctx,
+		`UPDATE workflow_edges SET condition=$2, priority=$3 WHERE id=$1`,
+		e.ID, e.Condition, e.Priority)
+	if err != nil {
+		return WorkflowEdge{}, fmt.Errorf("workflow.UpdateEdge: %w", err)
+	}
+	return e, nil
+}
+
 func (s *Store) DeleteEdge(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM workflow_edges WHERE id = $1`, id)
 	return err
@@ -328,6 +338,46 @@ func (s *Store) RecordCost(ctx context.Context, execID, agentID uuid.UUID, u Usa
 		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`,
 		execID, agentID, u.TokensIn, u.TokensOut, u.EstimatedCostUSD, u.Source)
 	return err
+}
+
+// --- Cost Summary ---
+
+type CostSummary struct {
+	TotalTokensIn    int     `json:"total_tokens_in"`
+	TotalTokensOut   int     `json:"total_tokens_out"`
+	TotalCostUSD     float64 `json:"total_cost_usd"`
+	AgentBreakdown   []AgentCost `json:"agent_breakdown,omitempty"`
+}
+
+type AgentCost struct {
+	AgentID   uuid.UUID `json:"agent_id"`
+	TokensIn  int       `json:"tokens_in"`
+	TokensOut int       `json:"tokens_out"`
+	CostUSD   float64   `json:"cost_usd"`
+	Source    string    `json:"source"`
+}
+
+func (s *Store) GetCostSummary(ctx context.Context, execID uuid.UUID) (CostSummary, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT agent_id, tokens_in, tokens_out, estimated_cost_usd, source
+		 FROM execution_costs WHERE execution_id = $1`, execID)
+	if err != nil {
+		return CostSummary{}, fmt.Errorf("workflow.GetCostSummary: %w", err)
+	}
+	defer rows.Close()
+
+	var summary CostSummary
+	for rows.Next() {
+		var ac AgentCost
+		if err := rows.Scan(&ac.AgentID, &ac.TokensIn, &ac.TokensOut, &ac.CostUSD, &ac.Source); err != nil {
+			return CostSummary{}, fmt.Errorf("workflow.GetCostSummary scan: %w", err)
+		}
+		summary.TotalTokensIn += ac.TokensIn
+		summary.TotalTokensOut += ac.TokensOut
+		summary.TotalCostUSD += ac.CostUSD
+		summary.AgentBreakdown = append(summary.AgentBreakdown, ac)
+	}
+	return summary, nil
 }
 
 // --- Guardrails ---

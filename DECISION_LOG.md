@@ -170,6 +170,28 @@
 
 ---
 
+## @xyflow/react instead of reactflow
+
+**Date:** 2026-04-04
+**Phase:** Phase 4 — Frontend
+**Decision:** Use `@xyflow/react` (v12+) instead of the `reactflow` package listed in STEPS.md.
+**Alternatives considered:** Installing legacy `reactflow` package.
+**Rationale:** `reactflow` was renamed to `@xyflow/react` in v12. The old package name is deprecated. The API is nearly identical but imports come from `@xyflow/react`.
+**Consequences:** Import paths differ from STEPS.md sketches but functionality is the same.
+
+---
+
+## Client components with useParams instead of async params
+
+**Date:** 2026-04-04
+**Phase:** Phase 4 — Frontend
+**Decision:** Use `'use client'` + `useParams()` for dynamic route pages instead of server component async `params`.
+**Alternatives considered:** Server components with `await params` (Next.js 16 pattern).
+**Rationale:** All dynamic pages (agent detail, workflow editor, monitor) need client-side interactivity (React Flow, SSE, state). Using `useParams()` in client components is simpler than splitting into server/client layers.
+**Consequences:** Pages are fully client-rendered. Initial load fetches data client-side. Acceptable for a dashboard-style app.
+
+---
+
 ## Goose CLI output format differs from STEPS.md assumptions
 
 **Date:** 2026-04-04
@@ -178,3 +200,58 @@
 **Alternatives considered:** Switching entirely to anthropic_direct.
 **Rationale:** Goose works (exit code 0, correct response "PONG"), but the output format requires finding the last assistant message and extracting text. Token split will be estimated (~50/50 of total_tokens, or char-count fallback). Both runtimes remain supported as planned.
 **Consequences:** GooseRunner.parseOutput needs to handle the messages array format and skip banner text. Token cost tracking from Goose will be approximate.
+
+---
+
+## Inline edge condition editor over modal dialog
+
+**Date:** 2026-04-07
+**Phase:** Phase 4 — Frontend Improvements
+**Decision:** Edge conditions are edited via an inline panel anchored to the bottom-center of the React Flow canvas, triggered by clicking an edge. Condition is a dropdown (always/approved/rejected/custom) with an optional free-text input for custom substring matches. Priority is a number input.
+**Alternatives considered:** Full modal dialog, right-click context menu, sidebar panel.
+**Rationale:** An inline panel keeps the user's attention on the workflow graph and avoids the heavy context switch of a modal. The dropdown presets cover the most common conditions while custom allows arbitrary substring matching consistent with the engine's `evaluateCondition` logic.
+**Consequences:** Edge updates require a new `PUT /api/workflows/{id}/edges/{edgeId}` endpoint (added). The panel closes on save or manual dismiss.
+
+---
+
+## Execution GET response extended with aggregated cost summary
+
+**Date:** 2026-04-07
+**Phase:** Phase 4 — Frontend Improvements
+**Decision:** The `GET /api/executions/{id}` response now includes a `cost_summary` field with `total_tokens_in`, `total_tokens_out`, `total_cost_usd`, and per-agent breakdown. Aggregation is done via a new `GetCostSummary` store method that queries `execution_costs`.
+**Alternatives considered:** (1) Separate `GET /api/executions/{id}/costs` endpoint. (2) Client-side aggregation from raw cost rows.
+**Rationale:** Embedding the summary in the existing execution response avoids an extra HTTP round-trip. The monitoring dashboard already polls `getExecution()` — no new fetch needed. Non-fatal: if cost query fails, the execution is still returned without costs.
+**Consequences:** The Execution response type is slightly larger. Frontend `Execution` interface extended with optional `cost_summary`.
+
+---
+
+## Renamed Skills tab to Schedules with full CRUD
+
+**Date:** 2026-04-07
+**Phase:** Phase 4 — Frontend Improvements
+**Decision:** Replaced the "Skills — coming soon" placeholder tab in AgentModal with a fully functional Schedules tab. Users can add cron schedules (expression + task prompt), toggle enabled/disabled, and delete schedules. Added `DELETE /api/agents/{id}/schedules/{scheduleId}` and `PUT /api/agents/{id}/schedules/{scheduleId}` (toggle enabled) backend endpoints.
+**Alternatives considered:** Adding schedules as a separate page section on the agent detail view.
+**Rationale:** Keeping schedules inside the AgentModal tab structure is consistent with how memory and guardrails are configured. The backend already had schedule CRUD — only the UI and delete/toggle endpoints were missing.
+**Consequences:** The Skills concept is no longer exposed in the UI. Skills backend CRUD remains available via API but has no frontend surface. This is acceptable since no template uses skills.
+
+---
+
+## Split handlers.go into domain-specific files
+
+**Date:** 2026-04-07
+**Phase:** Phase 5 — Code Quality
+**Decision:** Split the 899-line `internal/api/handlers.go` into 6 files: `helpers.go` (shared utilities), `agent_handler.go`, `workflow_handler.go`, `execution_handler.go`, `template_handler.go`, `webhook_handler.go`. No behavior changes.
+**Alternatives considered:** (1) Keep as-is (functional but hard to navigate). (2) Split into sub-packages per domain.
+**Rationale:** A single 900-line file with 30+ handler functions is hard to navigate and review. Domain-specific files match the route groups in `router.go`. Sub-packages would be over-engineering — all handlers share the same helper functions and belong in the same Chi router registration.
+**Consequences:** Each file has clear, focused responsibility. Import lists are smaller per file. No change to router.go or any external behavior.
+
+---
+
+## Integration tests use httptest with real DB and mock Runner
+
+**Date:** 2026-04-07
+**Phase:** Phase 5 — Code Quality
+**Decision:** Integration tests for template loading and WhatsApp webhook use `httptest.NewRecorder` + the real router, real PostgreSQL (`maestro_test`), and a mock `Runner`. The tests verify end-to-end behavior: HTTP request → handler → store → DB → response.
+**Alternatives considered:** (1) Unit tests mocking the store layer. (2) External test process hitting a running server.
+**Rationale:** The handler tests need to verify that the router correctly dispatches requests AND that the handler logic correctly creates the expected DB records. Mocking the store would not catch SQL or routing bugs. An external test process adds deployment complexity. `httptest` + real DB is the sweet spot for handler integration tests, consistent with the existing `engine_test.go` pattern.
+**Consequences:** Tests require a running PostgreSQL with `maestro_test` database. The cleanup block in `testPool` truncates all tables after each test to prevent cross-test contamination.

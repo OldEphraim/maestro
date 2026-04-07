@@ -56,6 +56,14 @@ func (s *Store) SetEnabled(ctx context.Context, scheduleID uuid.UUID, enabled bo
 	return nil
 }
 
+func (s *Store) DeleteSchedule(ctx context.Context, scheduleID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM agent_schedules WHERE id = $1`, scheduleID)
+	if err != nil {
+		return fmt.Errorf("agent.DeleteSchedule: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateLastRun(ctx context.Context, scheduleID uuid.UUID, lastRun, nextRun time.Time) error {
 	_, err := s.db.Exec(ctx,
 		`UPDATE agent_schedules SET last_run = $2, next_run = $3 WHERE id = $1`,

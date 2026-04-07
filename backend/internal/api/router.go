@@ -45,6 +45,8 @@ func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.
 			r.Delete("/skills/{skillId}", agentDeleteSkillHandler(agents))
 			r.Get("/schedules", agentGetSchedulesHandler(agents))
 			r.Post("/schedules", agentUpsertScheduleHandler(agents))
+			r.Delete("/schedules/{scheduleId}", agentDeleteScheduleHandler(agents))
+			r.Put("/schedules/{scheduleId}", agentToggleScheduleHandler(agents))
 		})
 	})
 
@@ -60,6 +62,7 @@ func NewRouter(agents *agent.Store, workflows *workflow.Store, broadcaster *sse.
 			r.Post("/nodes", workflowCreateNodeHandler(workflows))
 			r.Delete("/nodes/{nodeId}", workflowDeleteNodeHandler(workflows))
 			r.Post("/edges", workflowCreateEdgeHandler(workflows))
+			r.Put("/edges/{edgeId}", workflowUpdateEdgeHandler(workflows))
 			r.Delete("/edges/{edgeId}", workflowDeleteEdgeHandler(workflows))
 		})
 	})
