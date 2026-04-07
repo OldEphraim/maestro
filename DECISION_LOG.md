@@ -277,3 +277,14 @@
 **Alternatives considered:** (1) Always use random domains and re-configure Twilio on every startup. (2) Store the last-used URL and skip Twilio update if unchanged.
 **Rationale:** With a Hobby+ plan, ngrok provides a free reserved domain. A fixed domain eliminates the need to update the Twilio webhook on every restart — configure it once and forget. The implementation is a single optional config option passed to `ngrokconfig.HTTPEndpoint()`.
 **Consequences:** Users on the free ngrok plan still get random domains (NGROK_DOMAIN left empty). Hobby+ users set it once. The Twilio auto-update still runs on every startup as a safety net, but it's a no-op if the URL hasn't changed.
+
+---
+
+## Enable ngrok endpoint pooling to prevent ERR_NGROK_334
+
+**Date:** 2026-04-07
+**Phase:** Phase 3 — External Channel
+**Decision:** Added `ngrokconfig.WithPoolingEnabled(true)` to the ngrok listener options. This allows multiple instances (or a new instance after a crash) to share the same reserved domain without `ERR_NGROK_334` ("endpoint is already online") errors.
+**Alternatives considered:** (1) Leave pooling off and rely on the stale session expiring before restarting. (2) Use the ngrok API to force-disconnect stale sessions (requires a separate API key).
+**Rationale:** Without pooling, if the server is killed without a graceful shutdown (e.g. `kill -9`, crash, power loss), the stale ngrok session blocks new connections to the same domain until it expires server-side (can take several minutes). With pooling enabled, ngrok treats the new connection as a pool member and routes traffic to it immediately. This is the intended solution per ngrok's own error message.
+**Consequences:** Traffic to the reserved domain is load-balanced if multiple instances connect simultaneously. For a single-instance demo this is a no-op — the behavior is identical to non-pooled mode.

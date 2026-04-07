@@ -110,7 +110,9 @@ func main() {
 		// Start ngrok tunnel (30s timeout so we don't block forever on auth issues)
 		log.Println("NGROK_AUTH_TOKEN set — starting ngrok tunnel...")
 		tunnelCtx, tunnelCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		endpointOpts := []ngrokconfig.HTTPEndpointOption{}
+		endpointOpts := []ngrokconfig.HTTPEndpointOption{
+			ngrokconfig.WithPoolingEnabled(true),
+		}
 		if domain := os.Getenv("NGROK_DOMAIN"); domain != "" {
 			endpointOpts = append(endpointOpts, ngrokconfig.WithDomain(domain))
 			log.Printf("using reserved ngrok domain: %s", domain)
