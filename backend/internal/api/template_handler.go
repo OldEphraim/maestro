@@ -116,9 +116,15 @@ func templateLoadHandler(templatesDir string, agents *agent.Store, workflows *wo
 
 		ctx := r.Context()
 
-		// Create agents, mapping temp_id → real UUID
+		// Create or reuse agents, mapping temp_id → real UUID
 		agentMap := make(map[string]uuid.UUID)
 		for _, ta := range tf.Agents {
+			// Check if an agent with this name already exists
+			existing, err := agents.FindByName(ctx, ta.Name)
+			if err == nil {
+				agentMap[ta.TempID] = existing.ID
+				continue
+			}
 			a := agent.Agent{
 				Name:         ta.Name,
 				Role:         ta.Role,

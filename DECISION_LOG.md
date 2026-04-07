@@ -310,3 +310,14 @@
 **Alternatives considered:** (1) Multi-select dropdown. (2) Tag input with autocomplete.
 **Rationale:** There are only two supported channels. Checkboxes are the simplest UX for a small, fixed set of options — no parsing errors, no ambiguity about separators, and the state is immediately visible. A multi-select or tag input would be over-engineering for two options.
 **Consequences:** Adding a new channel requires adding one entry to the checkbox array in AgentModal.tsx. The `channels` state changed from `string` to `string[]`, and the `handleSaveBasic` function no longer splits on commas.
+
+---
+
+## Seed template agents on startup when DB is empty
+
+**Date:** 2026-04-07
+**Phase:** Phase 1 — Backend Foundation
+**Decision:** On startup, after migrations, if the agents table is empty, insert agents defined in all template JSON files as standalone agents. The template loader (`POST /api/templates/{id}/load`) now checks `FindByName` before creating, reusing existing agents instead of creating duplicates.
+**Alternatives considered:** (1) Require the user to manually load a template before seeing any agents. (2) Add an `is_system` column to distinguish seeded from user-created agents.
+**Rationale:** A fresh install showing an empty agents page is a poor first impression. Pre-seeding with template agents means the user immediately sees 6 agents they can inspect, edit, and drag into custom workflows. The `FindByName` reuse means loading a template after seeding doesn't create duplicates — the same agents are wired into the new workflow. No schema change is needed since seeded agents are regular agents.
+**Consequences:** The `Count` and `FindByName` methods were added to `agent.Store`. Seeding only runs when the agents table is completely empty — adding even one custom agent prevents re-seeding on restart.

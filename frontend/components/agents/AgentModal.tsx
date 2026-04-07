@@ -29,6 +29,12 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
   const [newCronExpr, setNewCronExpr] = useState('');
   const [newTaskPrompt, setNewTaskPrompt] = useState('');
   const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2000);
+  };
 
   useEffect(() => {
     if (isEdit && agent) {
@@ -44,6 +50,7 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
       setSchedules(prev => [...prev, sch]);
       setNewCronExpr('');
       setNewTaskPrompt('');
+      showToast('Schedule added');
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Failed to create schedule');
     } finally {
@@ -85,6 +92,7 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
       } else {
         await createAgent(data);
       }
+      showToast('Agent saved');
       onSaved();
       onClose();
     } catch (e) {
@@ -106,6 +114,7 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
       for (const entry of memEntries) {
         if (entry.key && entry.value) await setMemory(agent.id, entry.key, entry.value);
       }
+      showToast('Memory saved');
       onSaved();
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Failed to save memory');
@@ -199,11 +208,11 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
             <Tabs.Content value="guardrails" className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Max Tokens Per Run</label>
-                <input type="number" value={maxTokens} onChange={e => setMaxTokens(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                <input type="number" min="0" value={maxTokens} onChange={e => setMaxTokens(parseInt(e.target.value, 10) || 0)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
               </div>
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Max Runs Per Hour</label>
-                <input type="number" value={maxRuns} onChange={e => setMaxRuns(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                <input type="number" min="0" value={maxRuns} onChange={e => setMaxRuns(parseInt(e.target.value, 10) || 0)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
               </div>
               <p className="text-xs text-slate-500">Guardrails are saved with the Basic tab.</p>
             </Tabs.Content>
@@ -245,6 +254,11 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
               )}
             </Tabs.Content>
           </Tabs.Root>
+          {toast && (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-green-700 text-white px-4 py-2 rounded-lg shadow-lg text-sm z-[100] animate-[fadeInOut_2s_ease-in-out]">
+              {toast}
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

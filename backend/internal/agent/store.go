@@ -126,6 +126,32 @@ func (s *Store) FindByChannel(ctx context.Context, channel string) (Agent, error
 	return a, nil
 }
 
+func (s *Store) Count(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM agents`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("agent.Count: %w", err)
+	}
+	return count, nil
+}
+
+func (s *Store) FindByName(ctx context.Context, name string) (Agent, error) {
+	var a Agent
+	var toolsJSON, channelsJSON, guardrailsJSON []byte
+	err := s.db.QueryRow(ctx,
+		`SELECT id, name, role, system_prompt, model, tools, channels, guardrails, created_at, updated_at
+		 FROM agents WHERE name = $1 LIMIT 1`, name,
+	).Scan(&a.ID, &a.Name, &a.Role, &a.SystemPrompt, &a.Model,
+		&toolsJSON, &channelsJSON, &guardrailsJSON, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return Agent{}, fmt.Errorf("agent.FindByName: %w", err)
+	}
+	json.Unmarshal(toolsJSON, &a.Tools)
+	json.Unmarshal(channelsJSON, &a.Channels)
+	json.Unmarshal(guardrailsJSON, &a.Guardrails)
+	return a, nil
+}
+
 func (s *Store) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
 	if err != nil {
