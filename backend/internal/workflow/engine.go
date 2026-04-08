@@ -54,13 +54,13 @@ func (e *Engine) Execute(ctx context.Context, workflowID uuid.UUID, trigger stri
 		return uuid.Nil, fmt.Errorf("engine.Execute: create execution: %w", err)
 	}
 
-	e.SSE.Publish(sse.Event{Type: "ExecutionStarted", ExecutionID: exec.ID.String()})
-
 	entry := wf.EntryNode()
 	if entry == nil {
 		e.failExecution(ctx, exec, "no entry node found")
 		return uuid.Nil, errors.New("no entry node found")
 	}
+
+	e.SSE.Publish(sse.Event{Type: "ExecutionStarted", ExecutionID: exec.ID.String(), AgentID: entry.AgentID.String()})
 
 	go e.runNode(ctx, exec, wf, entry, trigger)
 	return exec.ID, nil

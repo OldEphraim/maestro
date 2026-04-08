@@ -38,6 +38,9 @@ export default function MonitorPage() {
   // so it processes events before data-fetching effects can override statuses.
   useEffect(() => {
     for (const evt of events) {
+      if (evt.type === 'ExecutionStarted' && evt.agent_id) {
+        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'running' }));
+      }
       if (evt.type === 'AgentStarted' && evt.agent_id) {
         setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'running' }));
       }
