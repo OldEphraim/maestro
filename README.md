@@ -50,7 +50,7 @@ graph LR
 
 1. Clone and configure:
    ```bash
-   git clone https://labs.gauntletai.com/alangarber/maestro.git
+   git clone https://github.com/OldEphraim/maestro.git
    cd maestro
    cp .env.example .env
    # Fill in ANTHROPIC_API_KEY (required)
