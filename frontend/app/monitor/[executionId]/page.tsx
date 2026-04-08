@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, MessageSquare, Clock, CheckCircle, XCircle, Loader, AlertTriangle, DollarSign } from 'lucide-react';
-import { getExecution, getMessages, listAgents, type Execution, type Message, type Agent } from '@/lib/api';
+import { getExecution, getMessages, getWorkflow, listAgents, type Execution, type Message, type Agent } from '@/lib/api';
 import { useSSE, type SSEEvent } from '@/lib/sse';
 
 const statusIcon: Record<string, React.ReactNode> = {
@@ -43,7 +43,20 @@ export default function MonitorPage() {
   }, []);
 
   useEffect(() => {
-    getExecution(executionId).then(setExecution).catch(console.error);
+    getExecution(executionId).then(exec => {
+      setExecution(exec);
+      // If the execution is running and has a workflow, find the entry node
+      // and mark it as "running" immediately — the AgentStarted SSE event
+      // fires before the frontend subscription is established, so it's missed.
+      if (exec.status === 'running' && exec.workflow_id) {
+        getWorkflow(exec.workflow_id).then(wf => {
+          const entryNode = wf.nodes?.find(n => n.is_entry);
+          if (entryNode) {
+            setAgentStatuses(prev => prev[entryNode.agent_id] ? prev : { ...prev, [entryNode.agent_id]: 'running' });
+          }
+        }).catch(() => {});
+      }
+    }).catch(console.error);
   }, [executionId]);
 
   // Poll messages periodically + populate initial agent statuses
