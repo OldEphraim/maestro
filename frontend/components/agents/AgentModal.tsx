@@ -31,6 +31,18 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
+  const handleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    if (input.value === '0' && e.key >= '1' && e.key <= '9') {
+      e.preventDefault();
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+      )?.set;
+      nativeInputValueSetter?.call(input, e.key);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  };
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
@@ -208,11 +220,11 @@ export default function AgentModal({ agent, open, onClose, onSaved }: Props) {
             <Tabs.Content value="guardrails" className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Max Tokens Per Run</label>
-                <input type="number" min="0" value={maxTokens} onChange={e => setMaxTokens(parseInt(e.target.value, 10) || 0)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                <input type="number" min="0" value={maxTokens} onChange={e => setMaxTokens(parseInt(e.target.value, 10) || 0)} onKeyDown={handleNumberKeyDown} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
               </div>
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Max Runs Per Hour</label>
-                <input type="number" min="0" value={maxRuns} onChange={e => setMaxRuns(parseInt(e.target.value, 10) || 0)} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                <input type="number" min="0" value={maxRuns} onChange={e => setMaxRuns(parseInt(e.target.value, 10) || 0)} onKeyDown={handleNumberKeyDown} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
               </div>
               <p className="text-xs text-slate-500">Guardrails are saved with the Basic tab.</p>
             </Tabs.Content>

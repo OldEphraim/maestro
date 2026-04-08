@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge,
+  ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge, MarkerType,
   type Connection, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -13,6 +13,48 @@ import { getWorkflow, listAgents, executeWorkflow, createNode, createEdge as api
 import AgentNode from '@/components/flow/AgentNode';
 
 const nodeTypes = { agent: AgentNode };
+
+const defaultMarkerEnd = { type: MarkerType.ArrowClosed, color: '#64748b' };
+
+// Apply curvature offsets to edges between the same pair of nodes so they don't overlap.
+function applyEdgeOffsets(edges: Edge[]): Edge[] {
+  // Build a set of node-pair keys that have edges in both directions
+  const pairKeys = new Set<string>();
+  const edgesByPair = new Map<string, Edge[]>();
+  for (const e of edges) {
+    const fwd = `${e.source}|${e.target}`;
+    const rev = `${e.target}|${e.source}`;
+    if (!edgesByPair.has(fwd)) edgesByPair.set(fwd, []);
+    edgesByPair.get(fwd)!.push(e);
+    if (edgesByPair.has(rev)) {
+      pairKeys.add(fwd);
+      pairKeys.add(rev);
+    }
+  }
+
+  return edges.map(e => {
+    const key = `${e.source}|${e.target}`;
+    const revKey = `${e.target}|${e.source}`;
+    if (pairKeys.has(key)) {
+      // Determine direction: the "forward" direction (alphabetically smaller source) gets positive offset
+      const isForward = e.source < e.target;
+      const offset = isForward ? 0.4 : -0.4;
+      return {
+        ...e,
+        type: 'default',
+        pathOptions: { curvature: offset },
+      };
+    }
+    // Multiple edges in the same direction between the same nodes
+    const siblings = edgesByPair.get(key);
+    if (siblings && siblings.length > 1) {
+      const idx = siblings.indexOf(e);
+      const offset = idx === 0 ? 0.3 : -0.3;
+      return { ...e, type: 'default', pathOptions: { curvature: offset } };
+    }
+    return e;
+  });
+}
 
 export default function WorkflowEditorPage() {
   const params = useParams();
@@ -56,7 +98,7 @@ export default function WorkflowEditorPage() {
         })));
       }
       if (wf.edges) {
-        setEdges(wf.edges.map(e => ({
+        const rawEdges: Edge[] = wf.edges.map(e => ({
           id: e.id,
           source: e.source_node_id,
           target: e.target_node_id,
@@ -64,7 +106,9 @@ export default function WorkflowEditorPage() {
           animated: true,
           style: { stroke: '#64748b' },
           labelStyle: { fill: '#94a3b8', fontSize: 11 },
-        })));
+          markerEnd: defaultMarkerEnd,
+        }));
+        setEdges(applyEdgeOffsets(rawEdges));
       }
     }).catch(console.error);
   }, [wfId, agentMap, setNodes, setEdges]);
@@ -78,14 +122,18 @@ export default function WorkflowEditorPage() {
         condition: 'always',
         priority: 0,
       });
-      setEdges(eds => addEdge({
-        ...connection,
-        id: edge.id,
-        label: 'always',
-        animated: true,
-        style: { stroke: '#64748b' },
-        labelStyle: { fill: '#94a3b8', fontSize: 11 },
-      }, eds));
+      setEdges(eds => {
+        const updated = addEdge({
+          ...connection,
+          id: edge.id,
+          label: 'always',
+          animated: true,
+          style: { stroke: '#64748b' },
+          labelStyle: { fill: '#94a3b8', fontSize: 11 },
+          markerEnd: defaultMarkerEnd,
+        }, eds);
+        return applyEdgeOffsets(updated);
+      });
     } catch (e) {
       console.error(e);
     }
@@ -139,10 +187,10 @@ export default function WorkflowEditorPage() {
     const condition = edgeCondition === 'custom' ? edgeCustomCondition : edgeCondition;
     try {
       await updateEdge(wfId, selectedEdge.id, { condition, priority: edgePriority });
-      setEdges(eds => eds.map(e => e.id === selectedEdge.id ? {
+      setEdges(eds => applyEdgeOffsets(eds.map(e => e.id === selectedEdge.id ? {
         ...e,
         label: condition,
-      } : e));
+      } : e)));
       // Update workflow edges cache for priority tracking
       if (workflow?.edges) {
         const idx = workflow.edges.findIndex(e => e.id === selectedEdge.id);
@@ -227,7 +275,15 @@ export default function WorkflowEditorPage() {
               )}
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Priority (lower = evaluated first)</label>
-                <input type="number" value={edgePriority} onChange={e => setEdgePriority(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm" />
+                <input type="number" min="0" value={edgePriority} onChange={e => setEdgePriority(parseInt(e.target.value, 10) || 0)} onKeyDown={e => {
+                  const input = e.currentTarget;
+                  if (input.value === '0' && e.key >= '1' && e.key <= '9') {
+                    e.preventDefault();
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    setter?.call(input, e.key);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                  }
+                }} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm" />
               </div>
               <button onClick={handleSaveEdge} className="w-full px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm">Save</button>
             </div>
