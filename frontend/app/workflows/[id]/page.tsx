@@ -70,6 +70,8 @@ export default function WorkflowEditorPage() {
   const [edgeCondition, setEdgeCondition] = useState('always');
   const [edgePriority, setEdgePriority] = useState(0);
   const [edgeCustomCondition, setEdgeCustomCondition] = useState('');
+  const [showRunPrompt, setShowRunPrompt] = useState(false);
+  const [runTask, setRunTask] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [toast, setToast] = useState<string | null>(null);
@@ -164,10 +166,25 @@ export default function WorkflowEditorPage() {
     }
   };
 
+  const openRunPrompt = () => {
+    // Pre-fill based on template
+    const templateId = workflow?.template_id;
+    if (templateId === 'connector-integration') {
+      setRunTask('Research the Stripe payment API and produce a full connector specification.');
+    } else if (templateId === 'nova-recovery') {
+      setRunTask('Check for failed transactions and initiate recovery.');
+    } else {
+      setRunTask('');
+    }
+    setShowRunPrompt(true);
+  };
+
   const handleRun = async () => {
+    setShowRunPrompt(false);
     setRunning(true);
     try {
-      const res = await executeWorkflow(wfId);
+      const trigger = runTask.trim() || 'manual';
+      const res = await executeWorkflow(wfId, trigger);
       router.push(`/monitor/${res.execution_id}`);
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Failed to execute');
@@ -274,7 +291,7 @@ export default function WorkflowEditorPage() {
               </div>
             )}
           </div>
-          <button onClick={handleRun} disabled={running} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-sm">
+          <button onClick={openRunPrompt} disabled={running} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-sm">
             <Play size={14} /> {running ? 'Starting...' : 'Run Workflow'}
           </button>
         </div>
@@ -329,6 +346,25 @@ export default function WorkflowEditorPage() {
                 }} className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm" />
               </div>
               <button onClick={handleSaveEdge} className="w-full px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm">Save</button>
+            </div>
+          </div>
+        )}
+        {showRunPrompt && (
+          <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-50">
+            <div className="bg-slate-800 border border-slate-700 rounded-lg shadow-xl p-5 w-96">
+              <h4 className="text-sm font-medium text-white mb-3">Task for entry agent</h4>
+              <textarea
+                value={runTask}
+                onChange={e => setRunTask(e.target.value)}
+                rows={3}
+                placeholder="Describe the task for the first agent..."
+                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm mb-3"
+                autoFocus
+              />
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowRunPrompt(false)} className="px-3 py-1.5 text-slate-400 hover:text-white text-sm">Cancel</button>
+                <button onClick={handleRun} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm">Run</button>
+              </div>
             </div>
           </div>
         )}

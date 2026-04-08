@@ -152,8 +152,8 @@ export const updateWorkflow = (id: string, data: Partial<Workflow>) =>
   request<Workflow>(`/api/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteWorkflow = (id: string) =>
   request<void>(`/api/workflows/${id}`, { method: 'DELETE' });
-export const executeWorkflow = (id: string) =>
-  request<{ execution_id: string }>(`/api/workflows/${id}/execute`, { method: 'POST', body: JSON.stringify({ trigger: 'manual' }) });
+export const executeWorkflow = (id: string, trigger?: string) =>
+  request<{ execution_id: string }>(`/api/workflows/${id}/execute`, { method: 'POST', body: JSON.stringify({ trigger: trigger || 'manual' }) });
 
 export const createNode = (workflowId: string, data: Partial<WorkflowNode>) =>
   request<WorkflowNode>(`/api/workflows/${workflowId}/nodes`, { method: 'POST', body: JSON.stringify(data) });

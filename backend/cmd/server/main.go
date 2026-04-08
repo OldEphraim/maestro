@@ -169,16 +169,16 @@ func main() {
 }
 
 // seedTemplateAgents inserts agents from template JSON files into the database
-// if the agents table is empty. This gives a fresh install pre-built agents
-// that appear on the /agents page and can be dragged into custom workflows.
+// if the agents table is empty. On every startup, it also syncs system prompts
+// of existing template agents to match the current template files.
 func seedTemplateAgents(ctx context.Context, store *agent.Store, templatesDir string) {
-	count, err := store.Count(ctx)
-	if err != nil {
-		log.Printf("WARNING: seed check failed: %v", err)
-		return
-	}
-	if count > 0 {
-		return
+	type templateAgent struct {
+		Name         string   `json:"name"`
+		Role         string   `json:"role"`
+		SystemPrompt string   `json:"system_prompt"`
+		Model        string   `json:"model"`
+		Tools        []string `json:"tools"`
+		Channels     []string `json:"channels"`
 	}
 
 	entries, err := os.ReadDir(templatesDir)
@@ -187,7 +187,7 @@ func seedTemplateAgents(ctx context.Context, store *agent.Store, templatesDir st
 		return
 	}
 
-	seeded := 0
+	var allAgents []templateAgent
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -197,45 +197,60 @@ func seedTemplateAgents(ctx context.Context, store *agent.Store, templatesDir st
 			continue
 		}
 		var tf struct {
-			Agents []struct {
-				Name         string   `json:"name"`
-				Role         string   `json:"role"`
-				SystemPrompt string   `json:"system_prompt"`
-				Model        string   `json:"model"`
-				Tools        []string `json:"tools"`
-				Channels     []string `json:"channels"`
-			} `json:"agents"`
+			Agents []templateAgent `json:"agents"`
 		}
 		if err := json.Unmarshal(data, &tf); err != nil {
 			continue
 		}
-		for _, ta := range tf.Agents {
-			a := agent.Agent{
-				Name:         ta.Name,
-				Role:         ta.Role,
-				SystemPrompt: ta.SystemPrompt,
-				Model:        ta.Model,
-				Tools:        ta.Tools,
-				Channels:     ta.Channels,
+		allAgents = append(allAgents, tf.Agents...)
+	}
+
+	seeded, synced := 0, 0
+	for _, ta := range allAgents {
+		a := agent.Agent{
+			Name:         ta.Name,
+			Role:         ta.Role,
+			SystemPrompt: ta.SystemPrompt,
+			Model:        ta.Model,
+			Tools:        ta.Tools,
+			Channels:     ta.Channels,
+		}
+		if a.Model == "" {
+			a.Model = "claude-sonnet-4-5-20250929"
+		}
+		if a.Tools == nil {
+			a.Tools = []string{}
+		}
+		if a.Channels == nil {
+			a.Channels = []string{}
+		}
+
+		existing, err := store.FindByName(ctx, ta.Name)
+		if err == nil {
+			// Agent exists — sync system prompt if changed
+			if existing.SystemPrompt != ta.SystemPrompt {
+				existing.SystemPrompt = ta.SystemPrompt
+				existing.Channels = a.Channels
+				if _, err := store.Update(ctx, existing); err != nil {
+					log.Printf("WARNING: sync agent %s: %v", ta.Name, err)
+				} else {
+					synced++
+				}
 			}
-			if a.Model == "" {
-				a.Model = "claude-sonnet-4-5-20250929"
-			}
-			if a.Tools == nil {
-				a.Tools = []string{}
-			}
-			if a.Channels == nil {
-				a.Channels = []string{}
-			}
-			if _, err := store.Create(ctx, a); err != nil {
-				log.Printf("WARNING: seed agent %s: %v", ta.Name, err)
-			} else {
-				seeded++
-			}
+			continue
+		}
+		// Agent doesn't exist — create it
+		if _, err := store.Create(ctx, a); err != nil {
+			log.Printf("WARNING: seed agent %s: %v", ta.Name, err)
+		} else {
+			seeded++
 		}
 	}
 	if seeded > 0 {
 		log.Printf("seeded %d template agents", seeded)
+	}
+	if synced > 0 {
+		log.Printf("synced %d template agent prompts", synced)
 	}
 }
 

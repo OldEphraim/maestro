@@ -62,7 +62,7 @@ func (e *Engine) Execute(ctx context.Context, workflowID uuid.UUID, trigger stri
 		return uuid.Nil, errors.New("no entry node found")
 	}
 
-	go e.runNode(ctx, exec, wf, entry, "Start workflow")
+	go e.runNode(ctx, exec, wf, entry, trigger)
 	return exec.ID, nil
 }
 

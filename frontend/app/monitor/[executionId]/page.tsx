@@ -46,9 +46,24 @@ export default function MonitorPage() {
     getExecution(executionId).then(setExecution).catch(console.error);
   }, [executionId]);
 
-  // Poll messages periodically
+  // Poll messages periodically + populate initial agent statuses
   useEffect(() => {
-    const load = () => getMessages(executionId).then(setMessages).catch(() => {});
+    const load = () => getMessages(executionId).then(msgs => {
+      setMessages(msgs);
+      // Populate agent statuses from existing messages so the first agent
+      // shows "completed" immediately even if the SSE event was missed.
+      if (msgs.length > 0) {
+        setAgentStatuses(prev => {
+          const updated = { ...prev };
+          for (const msg of msgs) {
+            if (msg.from_agent_id && !updated[msg.from_agent_id]) {
+              updated[msg.from_agent_id] = 'completed';
+            }
+          }
+          return updated;
+        });
+      }
+    }).catch(() => {});
     load();
     const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
@@ -94,7 +109,10 @@ export default function MonitorPage() {
     }
   }, [events, messages]);
 
-  const uniqueAgentIds = [...new Set(events.filter(e => e.agent_id).map(e => e.agent_id!))];
+  const uniqueAgentIds = [...new Set([
+    ...events.filter(e => e.agent_id).map(e => e.agent_id!),
+    ...messages.map(m => m.from_agent_id).filter(Boolean),
+  ])];
 
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
