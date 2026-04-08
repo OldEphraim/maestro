@@ -34,6 +34,26 @@ export default function MonitorPage() {
   const { events } = useSSE(executionId);
   const timelineRef = useRef<HTMLDivElement>(null);
 
+  // Update agent statuses from SSE events — must be the first useEffect
+  // so it processes events before data-fetching effects can override statuses.
+  useEffect(() => {
+    for (const evt of events) {
+      if (evt.type === 'AgentStarted' && evt.agent_id) {
+        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'running' }));
+      }
+      if (evt.type === 'AgentCompleted' && evt.agent_id) {
+        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'completed' }));
+      }
+      if (evt.type === 'ExecutionCompleted' || evt.type === 'ExecutionFailed') {
+        getExecution(executionId).then(setExecution).catch(() => {});
+        getMessages(executionId).then(setMessages).catch(() => {});
+      }
+      if (evt.type === 'StepTimedOut' && evt.agent_id) {
+        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'timed_out' }));
+      }
+    }
+  }, [events, executionId]);
+
   useEffect(() => {
     listAgents().then(agents => {
       const m: Record<string, Agent> = {};
@@ -81,25 +101,6 @@ export default function MonitorPage() {
     const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
   }, [executionId]);
-
-  // Update agent statuses from SSE events
-  useEffect(() => {
-    for (const evt of events) {
-      if (evt.type === 'AgentStarted' && evt.agent_id) {
-        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'running' }));
-      }
-      if (evt.type === 'AgentCompleted' && evt.agent_id) {
-        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'completed' }));
-      }
-      if (evt.type === 'ExecutionCompleted' || evt.type === 'ExecutionFailed') {
-        getExecution(executionId).then(setExecution).catch(() => {});
-        getMessages(executionId).then(setMessages).catch(() => {});
-      }
-      if (evt.type === 'StepTimedOut' && evt.agent_id) {
-        setAgentStatuses(prev => ({ ...prev, [evt.agent_id!]: 'timed_out' }));
-      }
-    }
-  }, [events, executionId]);
 
   // Elapsed timer
   useEffect(() => {
