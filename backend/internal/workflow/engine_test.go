@@ -157,8 +157,8 @@ func TestLinearWorkflowCompletes(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	// Wait for async execution
-	time.Sleep(2 * time.Second)
+	// Wait for async execution (includes 2s first-step delay)
+	time.Sleep(5 * time.Second)
 
 	// Verify execution completed
 	exec, err := wfStore.GetExecution(context.Background(), execID)
@@ -227,7 +227,7 @@ func TestCycleGuard(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(6 * time.Second)
 
 	exec, _ := wfStore.GetExecution(ctx, execID)
 	if exec.Status != "failed" {
@@ -274,7 +274,7 @@ func TestApprovalPathCompletes(t *testing.T) {
 	engine := workflow.NewEngine(agentStore, wfStore, mock, broadcaster, &channels.NoopClient{})
 	execID, _ := engine.Execute(ctx, wf.ID, "test")
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	exec, _ := wfStore.GetExecution(ctx, execID)
 	if exec.Status != "completed" {
@@ -302,7 +302,7 @@ func TestStepTimeout(t *testing.T) {
 	engine := workflow.NewEngine(agentStore, wfStore, mock, broadcaster, &channels.NoopClient{})
 	execID, _ := engine.Execute(context.Background(), wfID, "test")
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(6 * time.Second)
 
 	exec, _ := wfStore.GetExecution(context.Background(), execID)
 	if exec.Status != "timed_out" {

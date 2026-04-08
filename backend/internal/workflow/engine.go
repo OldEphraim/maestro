@@ -134,6 +134,12 @@ func (e *Engine) runNode(ctx context.Context, exec *Execution, wf *FullWorkflow,
 	stepCtx, cancel := context.WithTimeout(ctx, stepTimeout())
 	defer cancel()
 
+	// Only delay for the first agent step — gives the frontend time to establish
+	// its SSE connection before events start firing. Subsequent agents don't need
+	// this because the connection is already live.
+	if count == 1 {
+		time.Sleep(2 * time.Second)
+	}
 	log.Printf("[engine] exec=%s agent=%s (%s) starting", exec.ID, ag.Name, node.Label)
 	e.SSE.Publish(sse.Event{Type: "AgentStarted", ExecutionID: exec.ID.String(), AgentID: node.AgentID.String()})
 
