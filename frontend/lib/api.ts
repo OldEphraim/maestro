@@ -148,6 +148,8 @@ export const listWorkflows = () => request<Workflow[]>('/api/workflows');
 export const getWorkflow = (id: string) => request<Workflow>(`/api/workflows/${id}`);
 export const createWorkflow = (data: Partial<Workflow>) =>
   request<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(data) });
+export const updateWorkflow = (id: string, data: Partial<Workflow>) =>
+  request<Workflow>(`/api/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteWorkflow = (id: string) =>
   request<void>(`/api/workflows/${id}`, { method: 'DELETE' });
 export const executeWorkflow = (id: string) =>

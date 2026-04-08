@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge, MarkerType,
@@ -9,7 +9,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import Link from 'next/link';
 import { ArrowLeft, Play, Plus } from 'lucide-react';
-import { getWorkflow, listAgents, executeWorkflow, createNode, createEdge as apiCreateEdge, updateEdge, type Workflow, type Agent, type WorkflowEdge } from '@/lib/api';
+import { getWorkflow, listAgents, executeWorkflow, createNode, createEdge as apiCreateEdge, updateEdge, updateWorkflow, type Workflow, type Agent, type WorkflowEdge } from '@/lib/api';
 import AgentNode from '@/components/flow/AgentNode';
 
 const nodeTypes = { agent: AgentNode };
@@ -70,6 +70,10 @@ export default function WorkflowEditorPage() {
   const [edgeCondition, setEdgeCondition] = useState('always');
   const [edgePriority, setEdgePriority] = useState(0);
   const [edgeCustomCondition, setEdgeCustomCondition] = useState('');
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const agentMap = useMemo(() => {
     const m: Record<string, Agent> = {};
@@ -205,6 +209,30 @@ export default function WorkflowEditorPage() {
     }
   };
 
+  const startEditingName = () => {
+    if (!workflow) return;
+    setNameValue(workflow.name);
+    setEditingName(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  };
+
+  const saveName = async () => {
+    setEditingName(false);
+    if (!workflow || !nameValue.trim() || nameValue.trim() === workflow.name) return;
+    try {
+      await updateWorkflow(wfId, { name: nameValue.trim(), description: workflow.description, status: workflow.status });
+      setWorkflow({ ...workflow, name: nameValue.trim() });
+      setToast('Name saved');
+      setTimeout(() => setToast(null), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const cancelEditName = () => {
+    setEditingName(false);
+  };
+
   if (!workflow) return <div className="p-6 text-slate-400">Loading...</div>;
 
   return (
@@ -212,7 +240,22 @@ export default function WorkflowEditorPage() {
       <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-700">
         <div className="flex items-center gap-3">
           <Link href="/workflows" className="text-slate-400 hover:text-white"><ArrowLeft size={16} /></Link>
-          <h2 className="text-white font-medium">{workflow.name}</h2>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              value={nameValue}
+              onChange={e => setNameValue(e.target.value)}
+              onBlur={saveName}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.currentTarget.blur(); }
+                if (e.key === 'Escape') { cancelEditName(); }
+              }}
+              className="bg-transparent text-white font-medium border-b border-blue-500 outline-none px-0 py-0 text-base"
+              autoFocus
+            />
+          ) : (
+            <h2 onClick={startEditingName} className="text-white font-medium cursor-pointer hover:text-blue-300">{workflow.name}</h2>
+          )}
           <span className={`text-xs px-2 py-0.5 rounded ${workflow.status === 'active' ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-400'}`}>{workflow.status}</span>
         </div>
         <div className="flex gap-2">
@@ -290,6 +333,11 @@ export default function WorkflowEditorPage() {
           </div>
         )}
       </div>
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-green-700 text-white px-4 py-2 rounded-lg shadow-lg text-sm z-[100] animate-[fadeInOut_2s_ease-in-out]">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
