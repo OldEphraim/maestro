@@ -36,56 +36,76 @@ graph LR
 | Real-time | SSE (Server-Sent Events) | Simpler than WebSocket for unidirectional monitoring |
 | Orchestration | Docker Compose | Single `docker-compose up` runs everything |
 
-## Setup
+## Running Locally
+
+> **Note:** This project requires Twilio and ngrok credentials for the WhatsApp integration. These are tied to a specific sandbox and ngrok account. If you'd like to run it locally, please reach out and I'll walk you through setup — it takes about 10 minutes. The demo video shows the full system working end-to-end.
 
 ### Prerequisites
 
-- Docker Desktop running
-- Anthropic API key
-- (Optional) Goose CLI for local `goose` runtime: `brew install block-goose-cli`
-- (Optional) Twilio account for WhatsApp integration
-- (Optional) ngrok authtoken for automatic WhatsApp webhook tunneling (get it at [dashboard.ngrok.com](https://dashboard.ngrok.com/get-started/your-authtoken))
-
-### Quick Start
-
-1. Clone and configure:
-   ```bash
-   git clone https://github.com/OldEphraim/maestro.git
-   cd maestro
-   cp .env.example .env
-   # Fill in ANTHROPIC_API_KEY (required)
-   # Fill in TWILIO_* credentials (optional, for WhatsApp)
-   # Fill in NGROK_AUTH_TOKEN and NGROK_DOMAIN (optional — enables automatic ngrok tunnel on startup)
-   ```
-
-2. (One-time, if using WhatsApp) Start the backend, copy the webhook URL from the logs, and paste it into the Twilio sandbox console under "When a message comes in": https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn. With a reserved ngrok domain, this URL is stable across restarts.
-
-3. Start everything:
-   ```bash
-   docker compose up
-   ```
-
-4. Open [http://localhost:3000](http://localhost:3000)
-
-5. Load a template from the Templates page and run it.
-
-### Running Locally (without Docker)
-
+Install these before starting:
 ```bash
-# Terminal 1: PostgreSQL
-docker compose up postgres
+# Go 1.22+
+brew install go
 
-# Terminal 2: Backend
-cd backend
-export $(grep -v '^#' ../.env | grep -v '^\s*$' | sed 's/ *#.*//' | sed 's/[[:space:]]*$//' | xargs)
-export DATABASE_URL="postgres://maestro:maestro@localhost:5432/maestro?sslmode=disable"
-export MAESTRO_RUNTIME=anthropic_direct
-go run ./cmd/server
+# Node 20+
+brew install node
 
-# Terminal 3: Frontend
-cd frontend
-NEXT_PUBLIC_API_URL=http://localhost:8080 npm run dev
+# Docker Desktop
+# Download from https://www.docker.com/products/docker-desktop/
+
+# Goose CLI (agent runtime)
+brew install block-goose-cli
+goose configure  # select Anthropic, enter your API key
+
+# godotenv (for loading .env in local dev)
+go install github.com/joho/godotenv/cmd/godotenv@latest
 ```
+
+### Configuration
+```bash
+git clone https://github.com/OldEphraim/maestro.git
+cd maestro
+cp .env.example .env
+```
+
+Fill in your `.env`. The variables you'll need to personalize:
+
+| Variable | Where to get it |
+|---|---|
+| `ANTHROPIC_API_KEY` | console.anthropic.com |
+| `USER_PHONE_NUMBER` | Your WhatsApp number, e.g. +14405239475 |
+| `TWILIO_ACCOUNT_SID` | Twilio console → Account Info |
+| `TWILIO_AUTH_TOKEN` | Twilio console → Account Info |
+| `NGROK_AUTH_TOKEN` | dashboard.ngrok.com → Your Authtoken |
+| `NGROK_DOMAIN` | dashboard.ngrok.com → Domains (Hobby plan) |
+| `NGROK_API_KEY` | dashboard.ngrok.com → API |
+
+All other variables can be left as the defaults in `.env.example`.
+
+### WhatsApp sandbox setup (one-time)
+
+1. In the Twilio console: Messaging → Try it Out → WhatsApp Sandbox
+2. Set the webhook URL to: `https://<your-ngrok-domain>/api/webhooks/whatsapp`
+3. From your WhatsApp, send `join snow-torn` to **+1 415 523 8886**
+4. You'll receive a confirmation — you're in the sandbox
+
+> The sandbox join phrase expires after 72 hours of inactivity. Resend `join snow-torn` if messages stop arriving.
+
+### Start the project
+```bash
+# Terminal 1 — database + backend
+docker-compose up postgres -d
+cd backend && godotenv -f ../.env go run ./cmd/server
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+```
+
+Open http://localhost:3000. The backend logs will confirm the ngrok tunnel is live.
+
+### Verify it's working
+
+Send "hello" from your WhatsApp to **+1 415 523 8886**. You should get a reply within 30 seconds. Then load a template from the /templates page and run it.
 
 ## Runtime Choice
 

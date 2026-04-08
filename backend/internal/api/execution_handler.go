@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/oldephraim/maestro/backend/internal/workflow"
@@ -95,11 +96,15 @@ func executionCancelHandler() http.HandlerFunc {
 
 func mockFailedTransactionsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		phone := os.Getenv("USER_PHONE_NUMBER")
+		if phone == "" {
+			phone = "+14405239475"
+		}
 		now := time.Now()
 		txns := []map[string]any{
-			{"id": "txn_001", "amount": 99.99, "currency": "USD", "customer_phone": "+14405239475", "failure_reason": "insufficient_funds", "provider": "stripe", "failed_at": now.Add(-1 * time.Hour).Format(time.RFC3339)},
-			{"id": "txn_002", "amount": 249.00, "currency": "USD", "customer_phone": "+14405239475", "failure_reason": "card_declined", "provider": "adyen", "failed_at": now.Add(-55 * time.Minute).Format(time.RFC3339)},
-			{"id": "txn_003", "amount": 15.50, "currency": "EUR", "customer_phone": "+14405239475", "failure_reason": "expired_card", "provider": "checkout", "failed_at": now.Add(-30 * time.Minute).Format(time.RFC3339)},
+			{"id": "txn_001", "amount": 99.99, "currency": "USD", "customer_phone": phone, "failure_reason": "insufficient_funds", "provider": "stripe", "failed_at": now.Add(-1 * time.Hour).Format(time.RFC3339)},
+			{"id": "txn_002", "amount": 249.00, "currency": "USD", "customer_phone": phone, "failure_reason": "card_declined", "provider": "adyen", "failed_at": now.Add(-55 * time.Minute).Format(time.RFC3339)},
+			{"id": "txn_003", "amount": 15.50, "currency": "EUR", "customer_phone": phone, "failure_reason": "expired_card", "provider": "checkout", "failed_at": now.Add(-30 * time.Minute).Format(time.RFC3339)},
 		}
 		writeJSON(w, http.StatusOK, txns)
 	}
